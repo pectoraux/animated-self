@@ -57,6 +57,9 @@ class EngineConfig:
     consent_store: str = os.getenv(
         "CONSENT_STORE", str(ENGINE_ROOT / "consent-store")
     )
+    # HMAC secret for signing consent tokens. Set in prod so tokens survive
+    # restarts. Empty in dev -> consent.py uses a fixed insecure dev key.
+    consent_secret: str = os.getenv("CONSENT_SECRET", "")
 
     # --- Latency guardrails ---
     # If a frame's pose is older than this (ms) when it reaches inference, drop

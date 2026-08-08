@@ -33,11 +33,17 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import Response
 
 from config import cfg
+from consent import (
+    issue_challenge,
+    validate_consent_token,
+    verify_challenge,
+)
 from models import (
     Character,
     FrameStats,
     LivenessChallenge,
     LivenessResult,
+    LivenessVerifyRequest,
     PoseVector,
     RenderJob,
     RenderRequest,
@@ -119,9 +125,14 @@ def start_session(req: StartSessionRequest) -> StartSessionResponse:
         raise HTTPException(404, "character not found")
     char = chars[req.character_id]
 
-    # Consent gate: non-stock characters require a valid consent token.
-    if not char.consented and not req.consent_token:
-        raise HTTPException(403, "consent required for this character")
+    # Consent gate (finding #1 fix): non-consented (custom) characters require
+    # a VALID consent token — signature, expiry, and single-use challenge are
+    # all checked in consent.validate_consent_token(). Any non-empty string no
+    # longer passes.
+    if not char.consented:
+        ok, reason = validate_consent_token(req.consent_token)
+        if not ok:
+            raise HTTPException(403, f"consent required: {reason}")
 
     session_id = secrets.token_urlsafe(12)
     pipe = LivePipeline(
@@ -169,45 +180,39 @@ def session_preview(session_id: str) -> Response:
 # ---------------------------------------------------------------------------
 # Consent / liveness — the anti-deepfake gate
 # ---------------------------------------------------------------------------
-_CHALLENGE_STEPS = [
-    ["look_left", "look_right", "smile"],
-    ["blink_twice", "look_up", "smile"],
-    ["turn_head_left", "turn_head_right", "open_mouth"],
-]
+# Enforcement lives in engine/consent.py. This surface just exposes it.
+# Stock characters (Phase 1) have consented=True and bypass the gate. Custom
+# characters (Phase 2) require a valid HMAC-signed consent_token at session
+# start — see start_session() above.
 
 
 @app.post("/api/consent/liveness/request", response_model=LivenessChallenge)
 def request_liveness() -> LivenessChallenge:
-    import random
-    steps = random.choice(_CHALLENGE_STEPS)
-    return LivenessChallenge(
-        challenge_id=secrets.token_urlsafe(8),
-        steps=steps,
-        issued_at=int(time.time() * 1000),
-    )
+    cid, steps, issued_at_ms = issue_challenge()
+    return LivenessChallenge(challenge_id=cid, steps=steps, issued_at=issued_at_ms)
 
 
 @app.post("/api/consent/liveness/verify", response_model=LivenessResult)
-def verify_liveness(payload: dict) -> LivenessResult:
-    """Phase 1: verify the challenge steps were detected (client sends the
-    landmark evidence). Issue a consent_token bound to the captured face hash.
+def verify_liveness(req: LivenessVerifyRequest) -> LivenessResult:
+    """Verify the challenge issued for THIS challenge_id (not any challenge),
+    check the detected steps against the ones actually issued, and issue a
+    consent_token derived (HMAC-signed) from the captured face evidence.
 
-    Phase 2 will harden this: the consent_token is bound to an ArcFace-style
-    embedding, and re-verified on each session start for custom characters.
+    The challenge is single-use; the token is reusable within its TTL so a
+    creator doesn't redo liveness per stream. The face hash is a Phase 1
+    placeholder for a real ArcFace embedding (Phase 2) — the token format and
+    enforcement path are stable either way.
     """
-    challenge_id = payload.get("challenge_id", "")
-    detected = payload.get("detected_steps", [])
-    expected = next(
-        (s for s in _CHALLENGE_STEPS if any(d in s for d in detected)), []
+    passed, token, reason = verify_challenge(
+        challenge_id=req.challenge_id,
+        detected_steps=req.detected_steps,
+        landmark_evidence=req.landmark_evidence,
     )
-    passed = len(detected) >= 2 and all(d in expected for d in detected[:2])
-    # crude face "hash" placeholder — real embedding ships in Phase 2.
-    face_hash = secrets.token_hex(16)
     return LivenessResult(
-        challenge_id=challenge_id,
+        challenge_id=req.challenge_id,
         passed=passed,
-        consent_token=base64.urlsafe_b64encode(face_hash.encode()).decode(),
-        reason=None if passed else "challenge steps not detected in order",
+        consent_token=token,
+        reason=reason,
     )
 
 
@@ -267,16 +272,27 @@ async def ws_live(ws: WebSocket) -> None:
 
     async def heartbeat() -> None:
         # Keep proxies/gateway from dropping an idle WS between poses.
-        try:
-            while True:
-                await asyncio.sleep(15)
+        while True:
+            await asyncio.sleep(15)
+            try:
                 await ws.send_text(json.dumps({"type": "ping"}))
-        except WebSocketDisconnect:
-            return
+            except (WebSocketDisconnect, RuntimeError):
+                # Socket closed mid-sleep; recv_poses will tear us down.
+                return
 
+    # Finding #2 fix: recv_poses is the primary task; heartbeat is cancelled
+    # when it returns so we never send_text() on a closed socket. The previous
+    # asyncio.gather() let heartbeat raise RuntimeError on a closed socket up
+    # to 15s after disconnect — logged noise on every teardown.
+    import contextlib
+
+    hb = asyncio.create_task(heartbeat())
     try:
-        await asyncio.gather(recv_poses(), heartbeat())
+        await recv_poses()
     finally:
+        hb.cancel()
+        with contextlib.suppress(asyncio.CancelledError, Exception):
+            await hb
         log.info("ws_live disconnected session=%s", session_id)
 
 

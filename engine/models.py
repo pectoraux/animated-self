@@ -170,12 +170,24 @@ class LivenessChallenge(BaseModel):
     issued_at: int  # epoch ms
 
 
+class LivenessVerifyRequest(BaseModel):
+    """Client payload to /api/consent/liveness/verify."""
+    challenge_id: str
+    # Steps the client detected the creator performing, in order.
+    detected_steps: list[str] = Field(default_factory=list)
+    # The captured face evidence. Phase 1: any JSON-serializable landmark
+    # summary (deterministically hashed into the consent token). Phase 2
+    # replaces this with an ArcFace embedding vector.
+    landmark_evidence: dict | list = Field(default_factory=dict)
+
+
 class LivenessResult(BaseModel):
     challenge_id: str
     passed: bool
-    # A hash of the face embedding captured during the challenge. For stock
-    # chars this is just logged. For custom chars (Phase 2) it becomes the
-    # binding: you can only drive an avatar whose consent hash matches the
-    # live face currently on camera.
-    consent_token: str
+    # HMAC-signed token binding {challenge_id, face_hash, iat, exp}. Derived
+    # from the captured evidence — NOT random. Single-use challenge; the token
+    # itself is reusable within its TTL so a creator doesn't redo liveness per
+    # stream. Stock characters bypass this; custom characters (Phase 2) require
+    # a valid token at session start.
+    consent_token: str | None = None
     reason: str | None = None

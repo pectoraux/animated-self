@@ -1,8 +1,12 @@
-// This is your Prisma schema file,
-// learn more about it in the docs: https://pris.ly/d/prisma-schema
-
-// Looking for ways to speed up your queries, or scale easily with your serverless or edge functions?
-// Try Prisma Accelerate: https://pris.ly/cli/accelerate-init
+// animated-self Prisma schema.
+//
+// Phase 1 does not require a database — the live path is stateless and the
+// consent gate uses an in-process store (engine/consent.py). This schema
+// exists so Phase 2 can persist consent artifacts (binding a creator account
+// to a face-embedding hash) without a migration scramble, and so the consent
+// gate survives restarts / is auditable.
+//
+// The generic User/Post template models were removed (finding #3).
 
 generator client {
   provider = "prisma-client-js"
@@ -13,20 +17,35 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
+/// A creator's account. Phase 2 wires auth (NextAuth) to this.
 model User {
   id        String   @id @default(cuid())
   email     String   @unique
   name      String?
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
+
+  consents  ConsentRecord[]
 }
 
-model Post {
-  id        String   @id @default(cuid())
-  title     String
-  content   String?
-  published Boolean  @default(false)
-  authorId  String
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+/// Persisted liveness/consent artifact. Phase 1's engine/consent.py keeps
+/// these in memory; Phase 2 moves them here so they survive restarts and
+/// can be audited. The `faceHash` is a Phase 1 placeholder for a real
+/// ArcFace embedding (Phase 2 binds the avatar's reference image to the
+/// same embedding so only the creator can drive their own custom avatar).
+model ConsentRecord {
+  id           String   @id @default(cuid())
+  challengeId  String   @unique           // single-use, burned after verify
+  faceHash     String                      // sha256 of landmark evidence (Phase 1)
+  faceEmbedding String? @db.Text           // ArcFace vector (Phase 2)
+  issuedAt     DateTime @default(now())
+  expiresAt    DateTime
+  revokedAt    DateTime?
+
+  user         User     @relation(fields: [userId], references: [id])
+  userId       String
+
+  createdAt    DateTime @default(now())
+
+  @@index([userId])
 }

@@ -51,4 +51,12 @@ prompt
 
 server.log
 # Skills directory
+/skills/db/custom.db
+download/
+
+# Z.ai skills toolkit (not part of animated-self)
 /skills/
+
+# local build artifacts
+db/custom.db
+download/

@@ -7,16 +7,20 @@ const steps: { title: string; body: string }[] = [
     body: "Creator grants webcam/mic and records a 5-second selfie video.",
   },
   {
-    title: "Randomized motion challenge",
-    body: "Performs a randomized motion challenge (e.g. \u201Clook left, then smile\u201D) — proves liveness, not a photo.",
+    title: "Randomized motion challenge (issued, stored, single-use)",
+    body: "Engine issues a randomized challenge (e.g. \u201Clook left, then smile\u201D) and stores it keyed by challenge_id with a 120s TTL. The client can\u2019t pick which challenge it\u2019s answering, and the challenge is burned after one verify attempt — not just \u201Cany non-empty token passes.\u201D",
   },
   {
-    title: "Face embedding bound",
-    body: "App extracts the creator's face embedding from the challenge video; stores a hash binding {creator_account → face_embedding_hash}.",
+    title: "Token derived from evidence, not random",
+    body: "On verify, the engine checks the detected steps against the exact steps issued for that challenge_id, then issues an HMAC-signed consent_token binding {challenge_id, face_hash, iat, exp}. The face_hash is a deterministic sha256 of the captured landmark evidence — the token is derived from what was actually seen, not from random bytes.",
+  },
+  {
+    title: "Session start validates the token",
+    body: "start_session() calls validate_consent_token() for non-consented (custom) characters: checks the HMAC signature, expiry, and that the challenge hasn\u2019t been replayed. consent_token=\"x\" no longer skips the gate. Stock characters (Phase 1) have consented=true and bypass this — they\u2019re not a real person\u2019s likeness.",
   },
   {
     title: "Custom-char binding (Phase 2)",
-    body: "For custom characters, the reference is cryptographically tied to the liveness embedding — you can only generate/drive an avatar whose consent hash matches the live face currently on camera. Stock characters (Phase 1) bypass this (not a real person's likeness) but still log consent.",
+    body: "Phase 2 replaces the landmark face_hash with a real ArcFace embedding and binds the avatar\u2019s reference image to the same embedding — so only the creator can drive their own custom avatar. The token format and enforcement path are stable; only the embedding swaps.",
   },
   {
     title: "What it verifies",
