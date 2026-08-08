@@ -38,14 +38,14 @@ const phases: Phase[] = [
     badge: "SHIPPED · engine + UI",
     badgeTone: "border-emerald-500/30 bg-emerald-500/10 text-emerald-200",
     body:
-      "Real async render queue + worker behind the existing POST /api/render contract. Jobs transition queued → running → rendering → done (or failed) with progress polling every 500ms. The renderer is swappable: DemoRenderer (real MP4 — breathing/zoom animation for the audio duration, audio muxed via ffmpeg) ships by default so the async path is end-to-end runnable; DiffusionRenderer (the AniPortrait-style audio-driven backend) is a research-stage stub that raises NotImplementedError. The consent gate now applies to async renders too — a bound character's face_hash is checked on every render, matching the live path. 64 engine tests pass. The control panel surfaces the queue as an Async Render card with status badges, a progress bar, and a Download MP4 button.",
+      "Real async render queue + worker behind the existing POST /api/render contract. Jobs transition queued → running → rendering → done (or failed) with progress polling every 500ms, and the finished MP4 is served from GET /api/render/{job_id}/file. The consent gate applies to async renders too — a bound character's face_hash is checked on every render request, matching the live path. DiffusionRenderer runs whatever audio-driven reenactment command you configure via DIFFUSION_RENDER_CMD (an AniPortrait-style setup, or anything honoring the same reference-image + audio-in, MP4-out contract) — there is no bundled default model, for the same reason THA3's weights aren't bundled: we can't verify or redistribute either one here. 64 engine tests pass, covering the queue/job lifecycle, the consent gate, and the subprocess contract itself (using a stand-in command, not a real model). The control panel surfaces the queue as an Async Render card with status badges, a progress bar, and a Download MP4 button.",
     shipped: true,
     callout: {
       icon: "warning",
       title:
-        "Honest limitation — the DemoRenderer is NOT audio-driven lip-sync",
+        "Honest limitation — no renderer is bundled; you configure one",
       body:
-        "The DemoRenderer produces a real MP4 (breathing/zoom animation for the audio duration) but is NOT audio-driven lip-sync — it exercises the job queue, progress, and file output. The real AniPortrait-style diffusion backend is a research-stage stub (see docs/reality-check.md). No open-source model reliably hits anime-style audio-driven lip-sync at usable quality yet.",
+        "The render pipeline (queue, consent gate, progress tracking, MP4 delivery) is real and tested end to end. What it drives is not: DIFFUSION_RENDER_CMD is unset by default, so /api/render fails clearly until you point it at a real audio-driven diffusion renderer you've set up yourself. No open-source model reliably hits anime-style audio-driven lip-sync at usable quality yet — see docs/reality-check.md.",
     },
   },
   {

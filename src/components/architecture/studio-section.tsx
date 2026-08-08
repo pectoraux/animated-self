@@ -50,7 +50,7 @@ export function StudioSection() {
           </code>{" "}
           every 500ms and serves the MP4 from{" "}
           <code className="rounded bg-neutral-800 px-1 py-0.5 font-mono text-[11px] text-rose-200">
-            /api/render/{`{job_id}`}/download
+            /api/render/{`{job_id}`}/file
           </code>
           .
         </p>
