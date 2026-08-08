@@ -427,27 +427,25 @@ export function AsyncRender() {
                   onUrl={setDriverUrl}
                 />
                 <p className="text-[11px] leading-relaxed text-neutral-500">
-                  Audio-driven lip-sync. The demo renderer produces a placeholder
-                  video (breathing/zoom animation for the audio&rsquo;s duration)
-                  — real audio-driven anime reenactment is research-stage.
+                  Audio-driven lip-sync. The engine runs whatever renderer you
+                  configure via <code className="text-neutral-400">DIFFUSION_RENDER_CMD</code>
+                  (an AniPortrait-style setup, or anything honoring the same
+                  reference-image + audio-in, MP4-out contract). No model is
+                  bundled — see <code className="text-neutral-400">docs/reality-check.md</code>.
                 </p>
               </TabsContent>
 
               <TabsContent value="video" className="space-y-3">
-                <DriverInputRow
-                  kind="video"
-                  mode={driverMode}
-                  onModeChange={setDriverMode}
-                  file={driverFile}
-                  onFile={setDriverFile}
-                  url={driverUrl}
-                  onUrl={setDriverUrl}
-                />
-                <p className="text-[11px] leading-relaxed text-neutral-500">
-                  Re-drives from a recorded video at higher fidelity than live.
-                  The driver video&rsquo;s pose + expression are transferred to
-                  the avatar.
-                </p>
+                <div className="rounded-lg border border-neutral-800 bg-neutral-950/40 p-4 text-center">
+                  <p className="text-sm text-neutral-400">
+                    Video re-drive is not implemented yet.
+                  </p>
+                  <p className="mt-1 text-[11px] text-neutral-500">
+                    The engine currently accepts <code className="text-neutral-400">driver="audio"</code> only.
+                    Video re-drive (transferring pose + expression from a recorded
+                    video) is scoped for a later phase.
+                  </p>
+                </div>
               </TabsContent>
             </Tabs>
           </div>
@@ -472,9 +470,10 @@ export function AsyncRender() {
               />
             </div>
             <p className="mt-2 text-xs text-neutral-500">
-              {quality === "draft"
-                ? "Draft uses the same THA3 poser as live mode, rendered offline to MP4. Seconds-per-second."
-                : "High uses the diffusion backend (research-stage stub in this build) — minutes-per-second."}
+              The quality field is reserved for when multiple renderer backends
+              exist. Currently all renders go through the single{" "}
+              <code className="text-neutral-400">DIFFUSION_RENDER_CMD</code>{" "}
+              command regardless of this setting.
             </p>
           </div>
 
