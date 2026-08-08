@@ -1,9 +1,13 @@
 import { Section, Surface } from "./section";
 import { StudioPanel } from "@/components/studio/studio-panel";
+import { CreateCharacter } from "@/components/studio/create-character";
 
 /**
- * Section 10 — the interactive Studio control panel mockup.
- * The StudioPanel is a client component (engine probe + simulated state).
+ * Section 10 — the interactive Studio control panel mockup + the Phase 2
+ * Create Character panel.
+ *
+ * Order: Create Character first (because created chars appear in the picker
+ * below), then Studio (which reads the same shared character store).
  */
 export function StudioSection() {
   return (
@@ -11,9 +15,13 @@ export function StudioSection() {
       id="studio"
       eyebrow="Control panel"
       title="Studio — interactive mockup."
-      lede="The live-mode UX. In this sandbox there's no GPU and no virtual-cam driver, so the panel probes /api/health and falls back to demo mode with simulated stats. Run the Python engine and it lights up green."
+      lede="The live-mode UX. Create a character (Phase 2 — text / selfie / upload, with consent binding), then drive it. In this sandbox there's no GPU and no virtual-cam driver, so the panel probes /api/health and falls back to demo mode with simulated stats. Run the Python engine and it lights up green."
     >
-      <StudioPanel />
+      <CreateCharacter />
+
+      <div className="mt-6">
+        <StudioPanel />
+      </div>
 
       <Surface className="mt-6 bg-neutral-950/40 p-5">
         <p className="text-xs leading-relaxed text-neutral-500">
@@ -28,7 +36,8 @@ export function StudioSection() {
           <code className="rounded bg-neutral-800 px-1 py-0.5 font-mono text-[11px] text-amber-200">
             /api/characters
           </code>
-          .
+          . Generated characters created above appear here automatically —
+          locked until liveness is complete.
         </p>
       </Surface>
     </Section>

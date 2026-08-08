@@ -12,24 +12,29 @@ import {
   CardDescription,
 } from "@/components/ui/card";
 import {
+  Tooltip,
+  TooltipContent,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
+import {
   Activity,
   Camera,
   CheckCircle2,
   CircleAlert,
   Cpu,
   Gauge,
+  Lock,
   MonitorPlay,
   Play,
   Radio,
   Square,
+  Sparkles,
   Wifi,
   WifiOff,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
-import {
-  demoCharacters,
-  type DemoCharacter,
-} from "@/lib/demo-characters";
+import { useCharacterStore, type UiCharacter } from "@/lib/character-store";
+import type { Character } from "@contracts/types";
 
 const ENGINE_PORT = 3031;
 const HEALTH_TIMEOUT_MS = 1500;
@@ -60,11 +65,18 @@ const baseStats: LiveStats = {
 /**
  * The Studio control panel mockup.
  *
+ * Phase 2 update: now reads/writes the shared Zustand character store so that
+ * characters created in the Create Character panel appear here too. Generated
+ * characters start consented=false and render as locked / non-selectable;
+ * after a successful liveness bind (driven from the Create panel) they flip
+ * to selectable here.
+ *
  * Behavior:
  *  - On mount, probes GET /api/health?XTransformPort=3031 with a short
  *    timeout. On success, switches to "live" mode and tries to fetch the
- *    real character list. On failure, falls back to the 3 stock characters
- *    (Aoi / Ren / Yuki) and clearly labels "Demo mode".
+ *    real character list (stock + generated, per the Phase 2 /api/characters
+ *    response). On failure, falls back to the 3 stock characters (Aoi / Ren
+ *    / Yuki) and clearly labels "Demo mode".
  *  - "Start stream" transitions to a streaming state with a faux avatar
  *    preview (CSS-animated pulsing card with the character initial),
  *    simulated FPS / latency readouts jittered by ±3ms, and a Stop button.
@@ -73,12 +85,12 @@ export function StudioPanel() {
   const [engine, setEngine] = React.useState<EngineState>({
     status: "probing",
   });
-  const [characters, setCharacters] = React.useState<DemoCharacter[]>(
-    demoCharacters,
-  );
-  const [selectedId, setSelectedId] = React.useState<string>(
-    demoCharacters[0]!.id,
-  );
+  const characters = useCharacterStore((s) => s.characters);
+  const selectedId = useCharacterStore((s) => s.selectedId);
+  const setSelected = useCharacterStore((s) => s.setSelected);
+  const setStockFromEngine = useCharacterStore((s) => s.setStockFromEngine);
+  const setEngineConnected = useCharacterStore((s) => s.setEngineConnected);
+
   const [sink, setSink] = React.useState<SinkKind>("virtual_cam");
   const [streamState, setStreamState] = React.useState<StreamState>("idle");
   const [stats, setStats] = React.useState<LiveStats>(baseStats);
@@ -100,29 +112,19 @@ export function StudioPanel() {
           status: "live",
           capabilities: data.capabilities ?? {},
         });
-        // Try to pull the real character list.
+        setEngineConnected(true);
+        // Try to pull the real character list (stock + generated per Phase 2).
         return fetch(`/api/characters?XTransformPort=${ENGINE_PORT}`, {
           signal: ctrl.signal,
         })
           .then((r) => (r.ok ? r.json() : Promise.reject(new Error(String(r.status)))))
-          .then((list: Array<{ id: string; name: string; tags?: string[] }>) => {
+          .then((list: Character[]) => {
             if (cancelled || !Array.isArray(list) || list.length === 0) return;
-            // Map real characters into the demo shape (gradient is synthetic).
-            setCharacters(
-              list.map((c, i) => {
-                const fallback = demoCharacters[i % demoCharacters.length]!;
-                return {
-                  ...fallback,
-                  id: c.id,
-                  name: c.name,
-                  tags: c.tags ?? fallback.tags,
-                };
-              }),
-            );
-            setSelectedId(list[0]!.id);
+            // Replace stock with the engine's list; keep client-created chars.
+            setStockFromEngine(list);
           })
           .catch(() => {
-            /* keep stock characters */
+            /* keep current characters */
           });
       })
       .catch(() => {
@@ -132,6 +134,7 @@ export function StudioPanel() {
           reason:
             "Engine not connected — run the Python engine to go live.",
         });
+        setEngineConnected(false);
       })
       .finally(() => {
         clearTimeout(timer);
@@ -141,7 +144,7 @@ export function StudioPanel() {
       cancelled = true;
       ctrl.abort();
     };
-  }, []);
+  }, [setStockFromEngine, setEngineConnected]);
 
   // --- Streaming stat jitter --------------------------------------------
   React.useEffect(() => {
@@ -216,38 +219,35 @@ export function StudioPanel() {
               </h3>
               <span className="font-mono text-[11px] text-neutral-500">
                 {characters.length} available
+                {characters.some((c) => !c.consented && c.source !== "stock")
+                  ? " · some locked"
+                  : ""}
               </span>
             </div>
             <div className="grid grid-cols-3 gap-2">
               {characters.map((c) => {
                 const active = c.id === selected.id;
+                const locked =
+                  !c.consented && c.source !== "stock";
                 return (
-                  <button
+                  <CharacterPickerButton
                     key={c.id}
-                    type="button"
-                    onClick={() => setSelectedId(c.id)}
-                    aria-pressed={active}
-                    aria-label={`Select character ${c.name}`}
-                    className={cn(
-                      "group relative flex flex-col items-center gap-2 rounded-lg border p-3 text-center transition-all",
-                      active
-                        ? "border-rose-500/60 bg-rose-500/10"
-                        : "border-neutral-800 bg-neutral-950/40 hover:border-neutral-700 hover:bg-neutral-900",
-                    )}
-                  >
-                    <CharacterThumb character={c} active={active} />
-                    <span
-                      className={cn(
-                        "text-xs font-medium",
-                        active ? "text-rose-200" : "text-neutral-300",
-                      )}
-                    >
-                      {c.name}
-                    </span>
-                  </button>
+                    character={c}
+                    active={active}
+                    locked={locked}
+                    onPick={() => {
+                      if (!locked) setSelected(c.id);
+                    }}
+                  />
                 );
               })}
             </div>
+            {characters.some((c) => !c.consented && c.source !== "stock") ? (
+              <p className="mt-2 text-[11px] text-amber-200/80">
+                Locked characters need a liveness check first — use the Create
+                Character panel above to unlock them.
+              </p>
+            ) : null}
           </div>
 
           {/* Sink selector */}
@@ -429,11 +429,96 @@ function SinkToggle({
   );
 }
 
+/**
+ * A character picker tile. Generated/uploaded chars that haven't completed
+ * liveness render as locked (disabled) with a tooltip explaining why.
+ */
+function CharacterPickerButton({
+  character,
+  active,
+  locked,
+  onPick,
+}: {
+  character: UiCharacter;
+  active: boolean;
+  locked: boolean;
+  onPick: () => void;
+}) {
+  const isCustom =
+    character.source === "generated" || character.source === "uploaded";
+  const button = (
+    <button
+      type="button"
+      onClick={onPick}
+      disabled={locked}
+      aria-pressed={active}
+      aria-disabled={locked}
+      aria-label={
+        locked
+          ? `${character.name} — locked, complete liveness first`
+          : `Select character ${character.name}`
+      }
+      className={cn(
+        "group relative flex flex-col items-center gap-2 rounded-lg border p-3 text-center transition-all",
+        locked
+          ? "cursor-not-allowed border-neutral-800/60 bg-neutral-950/30 opacity-60"
+          : active
+            ? "border-rose-500/60 bg-rose-500/10"
+            : "border-neutral-800 bg-neutral-950/40 hover:border-neutral-700 hover:bg-neutral-900",
+      )}
+    >
+      <CharacterThumb character={character} active={active && !locked} />
+      <span
+        className={cn(
+          "flex items-center gap-1 text-xs font-medium",
+          active && !locked ? "text-rose-200" : "text-neutral-300",
+        )}
+      >
+        {locked ? (
+          <Lock className="size-3 text-amber-300" />
+        ) : null}
+        {character.name}
+      </span>
+      {isCustom && !locked ? (
+        <Badge
+          variant="outline"
+          className="absolute right-1 top-1 border-rose-500/40 bg-rose-500/15 px-1 py-0 text-[9px] text-rose-200"
+        >
+          <Sparkles className="size-2.5" />
+          custom
+        </Badge>
+      ) : null}
+      {isCustom && locked ? (
+        <Badge
+          variant="outline"
+          className="absolute right-1 top-1 border-amber-500/40 bg-amber-500/15 px-1 py-0 text-[9px] text-amber-200"
+        >
+          <Lock className="size-2.5" />
+          locked
+        </Badge>
+      ) : null}
+    </button>
+  );
+
+  if (!locked) return button;
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>{button}</TooltipTrigger>
+      <TooltipContent
+        side="bottom"
+        className="border border-neutral-700 bg-neutral-900 text-neutral-100"
+      >
+        Complete liveness first
+      </TooltipContent>
+    </Tooltip>
+  );
+}
+
 function CharacterThumb({
   character,
   active,
 }: {
-  character: DemoCharacter;
+  character: UiCharacter;
   active: boolean;
 }) {
   return (
@@ -458,7 +543,7 @@ function PreviewArea({
   sink,
   isDemo,
 }: {
-  character: DemoCharacter;
+  character: UiCharacter;
   streaming: boolean;
   sink: SinkKind;
   isDemo: boolean;

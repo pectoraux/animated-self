@@ -60,3 +60,7 @@ download/
 # local build artifacts
 db/custom.db
 download/
+agent-ctx/
+
+# generated character artifacts (engine/characters/generated/)
+engine/characters/generated/

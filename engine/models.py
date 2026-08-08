@@ -48,6 +48,53 @@ class Character(BaseModel):
 
 
 # ---------------------------------------------------------------------------
+# Phase 2 — character generation (BYOK)
+# ---------------------------------------------------------------------------
+
+class GenProviderInfo(BaseModel):
+    """Provider metadata for the control panel's provider selector."""
+    id: str
+    byok: bool
+    requires_key: bool
+    label: str
+
+
+class GenerateCharacterRequest(BaseModel):
+    """Text prompt -> anime character image. BYOK: the user's provider key is
+    sent per-request and never persisted by the engine."""
+    prompt: str
+    name: str
+    provider: str = "demo"   # "demo" | "openai"
+    api_key: str | None = None  # required when provider is BYOK
+
+
+class TransferCharacterRequest(BaseModel):
+    """Selfie image -> anime character (description-based, not pixel-level
+    identity transfer — see backends/character_gen.py)."""
+    # base64-encoded selfie image (data URI or raw base64)
+    selfie_b64: str
+    name: str
+    provider: str = "demo"
+    api_key: str | None = None
+
+
+class UploadCharacterRequest(BaseModel):
+    """Raw image upload for users who already have an anime character PNG.
+    Starts consented=False like generated chars."""
+    name: str
+    # base64-encoded PNG
+    image_b64: str
+
+
+class ConsentBindRequest(BaseModel):
+    """Bind a generated/uploaded character to a verified consent token. Called
+    after the creator completes liveness — flips consented=True and records
+    the bound face_hash so the character becomes drivable."""
+    character_id: str
+    consent_token: str
+
+
+# ---------------------------------------------------------------------------
 # Live path — PoseVector is THE wire format for real-time
 # ---------------------------------------------------------------------------
 

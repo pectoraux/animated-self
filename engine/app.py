@@ -6,6 +6,11 @@ Surface (the control panel talks to this via the gateway with ?XTransformPort=30
     GET  /api/health                       capability flags (cuda? model loaded?)
     GET  /api/characters                   -> Character[]
     GET  /api/characters/{id}/thumbnail    -> PNG
+    GET  /api/characters/providers         -> GenProviderInfo[]  (Phase 2)
+    POST /api/characters/generate           -> Character  (Phase 2, text->image, BYOK)
+    POST /api/characters/transfer           -> Character  (Phase 2, selfie->anime, BYOK)
+    POST /api/characters/upload             -> Character  (Phase 2, raw PNG upload)
+    POST /api/characters/{id}/consent/bind  -> Character  (Phase 2, bind liveness to char)
     POST /api/session/start                -> StartSessionResponse (binds char + output sink)
     POST /api/session/{id}/stop
     GET  /api/session/{id}/preview.jpg     (only when output=preview)
@@ -40,7 +45,10 @@ from consent import (
 )
 from models import (
     Character,
+    ConsentBindRequest,
     FrameStats,
+    GenerateCharacterRequest,
+    GenProviderInfo,
     LivenessChallenge,
     LivenessResult,
     LivenessVerifyRequest,
@@ -49,9 +57,17 @@ from models import (
     RenderRequest,
     StartSessionRequest,
     StartSessionResponse,
+    TransferCharacterRequest,
+    UploadCharacterRequest,
 )
-from backends import poser
-from characters import list_characters, get_character_image
+from backends import poser, get_provider, list_providers
+from characters import (
+    list_characters,
+    get_character,
+    get_character_image,
+    register_generated_character,
+    mark_consented,
+)
 from pipeline import LivePipeline
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
@@ -123,6 +139,99 @@ def character_thumbnail(character_id: str) -> Response:
     if not ok:
         raise HTTPException(500, "encode failed")
     return Response(content=buf.tobytes(), media_type="image/png")
+
+
+# ---------------------------------------------------------------------------
+# Phase 2 — character generation (BYOK)
+# ---------------------------------------------------------------------------
+def _decode_b64(s: str) -> bytes:
+    """Accept raw base64 or a data URI (data:image/png;base64,...)."""
+    if "," in s and s.startswith("data:"):
+        s = s.split(",", 1)[1]
+    try:
+        return base64.b64decode(s)
+    except Exception as e:
+        raise HTTPException(400, f"invalid base64 image: {e}")
+
+
+@app.get("/api/characters/providers", response_model=list[GenProviderInfo])
+def get_providers() -> list[GenProviderInfo]:
+    return [GenProviderInfo(**p) for p in list_providers()]
+
+
+@app.post("/api/characters/generate", response_model=Character)
+def generate_character(req: GenerateCharacterRequest) -> Character:
+    """Text prompt -> anime character image. BYOK: the user's api_key is used
+    for this request only and never persisted. Generated chars start
+    consented=False — they must be consent-bound before driving."""
+    try:
+        provider = get_provider(req.provider)
+    except KeyError:
+        raise HTTPException(400, f"unknown provider: {req.provider}")
+    if provider.byok and not req.api_key:
+        raise HTTPException(400, f"provider '{req.provider}' requires an api_key (BYOK)")
+    try:
+        png_bytes = provider.generate_from_prompt(req.prompt, req.api_key)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    except Exception as e:  # noqa: BLE001
+        log.warning("character generation failed: %s", e)
+        raise HTTPException(502, f"generation failed: {e}")
+    return register_generated_character(req.name, png_bytes, tags=["generated"])
+
+
+@app.post("/api/characters/transfer", response_model=Character)
+def transfer_character(req: TransferCharacterRequest) -> Character:
+    """Selfie -> anime character. Description-based (VLM describes the selfie,
+    then the provider generates an anime character matching the description).
+    NOT pixel-level identity preservation — see backends/character_gen.py."""
+    try:
+        provider = get_provider(req.provider)
+    except KeyError:
+        raise HTTPException(400, f"unknown provider: {req.provider}")
+    if provider.byok and not req.api_key:
+        raise HTTPException(400, f"provider '{req.provider}' requires an api_key (BYOK)")
+    selfie_bytes = _decode_b64(req.selfie_b64)
+    try:
+        png_bytes = provider.generate_from_selfie(selfie_bytes, req.api_key)
+    except Exception as e:  # noqa: BLE001
+        log.warning("selfie transfer failed: %s", e)
+        raise HTTPException(502, f"transfer failed: {e}")
+    return register_generated_character(req.name, png_bytes, tags=["selfie-transfer"])
+
+
+@app.post("/api/characters/upload", response_model=Character)
+def upload_character(req: UploadCharacterRequest) -> Character:
+    """Raw PNG upload. Starts consented=False like generated chars — the
+    creator must complete liveness before driving it."""
+    from models import CharacterSource
+    png_bytes = _decode_b64(req.image_b64)
+    return register_generated_character(
+        req.name, png_bytes, source=CharacterSource.UPLOADED, tags=["uploaded"]
+    )
+
+
+@app.post("/api/characters/{character_id}/consent/bind", response_model=Character)
+def consent_bind(character_id: str, req: ConsentBindRequest) -> Character:
+    """Bind a verified consent_token to a generated/uploaded character.
+
+    Called after the creator completes the liveness challenge. Validates the
+    token (signature + expiry), extracts the bound face_hash, and marks the
+    character consented=True so it can be driven.
+    """
+    if req.character_id != character_id:
+        raise HTTPException(400, "character_id mismatch")
+    ok, reason = validate_consent_token(req.consent_token)
+    if not ok:
+        raise HTTPException(403, f"invalid consent token: {reason}")
+    # Extract the face_hash from the token payload for the binding record.
+    from consent import _verify_sig
+    payload = _verify_sig(req.consent_token)
+    face_hash = (payload or {}).get("fh", "")
+    try:
+        return mark_consented(character_id, face_hash)
+    except KeyError as e:
+        raise HTTPException(404, str(e))
 
 
 @app.post("/api/session/start", response_model=StartSessionResponse)

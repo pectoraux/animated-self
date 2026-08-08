@@ -116,6 +116,46 @@ export interface LivenessResult {
   reason?: string | null;
 }
 
+// Client payload for /api/consent/liveness/verify.
+export interface LivenessVerifyRequest {
+  challenge_id: string;
+  detected_steps: string[];
+  landmark_evidence: Record<string, unknown> | unknown[];
+}
+
+// --- Phase 2 — character generation (BYOK) -------------------------------
+
+export interface GenProviderInfo {
+  id: string;
+  byok: boolean;
+  requires_key: boolean;
+  label: string;
+}
+
+export interface GenerateCharacterRequest {
+  prompt: string;
+  name: string;
+  provider: string;
+  api_key?: string | null;
+}
+
+export interface TransferCharacterRequest {
+  selfie_b64: string;
+  name: string;
+  provider: string;
+  api_key?: string | null;
+}
+
+export interface UploadCharacterRequest {
+  name: string;
+  image_b64: string;
+}
+
+export interface ConsentBindRequest {
+  character_id: string;
+  consent_token: string;
+}
+
 // --- Engine helpers ------------------------------------------------------
 
 export const ENGINE_PORT = 3031;

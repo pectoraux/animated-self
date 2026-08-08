@@ -58,8 +58,16 @@ class EngineConfig:
         "CONSENT_STORE", str(ENGINE_ROOT / "consent-store")
     )
     # HMAC secret for signing consent tokens. Set in prod so tokens survive
-    # restarts. Empty in dev -> consent.py uses a fixed insecure dev key.
+    # restarts. Empty in dev -> consent.py uses a random per-process key
+    # (NOT a committed literal — see engine/consent.py).
     consent_secret: str = os.getenv("CONSENT_SECRET", "")
+
+    # --- Phase 2: character generation ---
+    # Demo gen provider uses the platform key (violates BYOK). Enabled by
+    # default for local dev; MUST be false in production.
+    enable_builtin_gen_provider: bool = os.getenv(
+        "ENABLE_BUILTIN_GEN_PROVIDER", "true"
+    ).lower() in ("1", "true", "yes")
 
     # --- Latency guardrails ---
     # If a frame's pose is older than this (ms) when it reaches inference, drop

@@ -103,3 +103,58 @@ Stage Summary:
 - All 4 findings fixed. The consent gate is the important one: it's now a real enforced gate (issued→stored→verified→signed→validated→burned) rather than a no-op. Phase 2 can build custom-character generation on it.
 - 32 passing tests cover the nontrivial math + the gate mechanics + the staleness logic.
 - Pushed to GitHub (public repo).
+
+---
+Task ID: p2-1-through-p2-4
+Agent: lead (main)
+Task: Phase 2 engine backend — character generation (BYOK), registry lifecycle, consent binding, tests.
+
+Work Log:
+- Pulled and reviewed security fix f61aa60 (random per-process fallback secret). Confirmed consistent with consent.py design; rebased local worklog commit on top. Ran tests: 35 pass.
+- Flagged CONSENT_SECRET tradeoff: warn-and-continue is correct for single-process local engine; suggested lazy warning at point-of-need (only when a custom-char session is attempted) as a Phase 2 refinement, not a design change.
+- Created engine/backends/character_gen.py: GenProvider protocol + OpenAIProvider (real BYOK, DALL-E 3 via direct HTTPS, key never persisted) + DemoProvider (z-ai CLI subprocess, gated behind ENABLE_BUILTIN_GEN_PROVIDER, clearly labeled non-BYOK).
+- Created engine/backends/vlm_describe.py: VLM-based selfie description for the selfie→anime route (description-based, NOT pixel-level identity transfer — documented honestly).
+- Refactored engine/characters/registry.py: stock manifest stays read-only; generated chars persisted to characters/generated/manifest.json (mutable). Added register_generated_character (consented=false by default) + mark_consented (binds face_hash, flips consented=true) + get_character. Stock chars are immutable (mark_consented refuses them).
+- Added Phase 2 models to engine/models.py: GenProviderInfo, GenerateCharacterRequest, TransferCharacterRequest, UploadCharacterRequest, ConsentBindRequest.
+- Added Phase 2 endpoints to engine/app.py: GET /api/characters/providers, POST /api/characters/generate, POST /api/characters/transfer, POST /api/characters/upload, POST /api/characters/{id}/consent/bind. BYOK key validation: BYOK providers require api_key; demo doesn't. Key is used in-request only, never logged/persisted (verified by test).
+- Added config: ENABLE_BUILTIN_GEN_PROVIDER (default true in dev, must be false in prod).
+- Wrote engine/tests/test_character_gen.py: 11 tests covering registry lifecycle, consent binding (refuses stock, refuses unknown), provider selection (demo hidden when disabled), BYOK key required + not persisted, full register→liveness→bind→drivable flow. Fixed frozen-dataclass monkeypatch issue (swap module cfg ref via SimpleNamespace). All 46 tests pass.
+
+Stage Summary:
+- Phase 2 engine backend complete and tested. The generation path is real BYOK (OpenAI provider does direct HTTPS with user key); demo provider (z-ai CLI) is gated and labeled.
+- Generated/uploaded chars start consented=false and CANNOT be driven until the creator completes liveness and calls /consent/bind — the gate from Phase 1 enforces this with no changes needed.
+- The inference layer (THA3) is untouched — a generated PNG is just another source image, exactly as the roadmap promised.
+- 46 tests pass (35 prior + 11 new).
+- Next: UI (Create character flow) + contracts/types.ts mirror + architecture page update — delegating to full-stack subagent.
+
+---
+Task ID: p2-5
+Agent: full-stack-developer (Phase 2 UI)
+Task: Build the Phase 2 frontend — Create Character panel (text/selfie/upload tabs), liveness→bind flow, shared Zustand character store, Studio picker integration, roadmap SHIPPED badge + honest limitation callout.
+
+Work Log:
+- Read worklog.md (Tasks 1-2, 5, 6, review-fixes, p2-1-through-p2-4) and inspected the existing components: src/app/page.tsx, src/app/layout.tsx, src/components/architecture/{section,site-header,studio-section,roadmap,consent}.tsx, src/components/studio/studio-panel.tsx, src/lib/demo-characters.ts, contracts/types.ts, engine/models.py. Confirmed the dark studio aesthetic (bg-neutral-950, rose accent, amber warnings, no indigo/blue).
+- Updated contracts/types.ts — added GenProviderInfo, GenerateCharacterRequest, TransferCharacterRequest, UploadCharacterRequest, ConsentBindRequest, LivenessVerifyRequest. Kept engineUrl()/ENGINE_PORT/engineWsUrl() unchanged. Additive only.
+- Added path alias `@contracts/* -> ./contracts/*` to tsconfig.json so the engine contracts at the repo root (originally created in Task 1-2 outside src/) can be imported from src/ components.
+- Created src/lib/character-store.ts — Zustand store with: characters (seeded from demoCharacters), selectedId, engineConnected, setSelected, setEngineConnected, addCreated({name, source, simulated, tags}) → id, setConsented(id), setStockFromEngine(list). UiCharacter = Character + gradient + initial + blurb + simulated? (the synthetic thumbnail fields used by the demo-mode picker). Ids are `gen-demo-xxxx` / `gen-real-xxxx` / `upload-demo-xxxx` / `upload-real-xxxx`. setStockFromEngine replaces stock chars with the engine's list and keeps client-created chars; falls back selectedId to the first available if the previously-selected stock char disappears.
+- Created src/components/studio/create-character.tsx (~1600 lines, single client island). Components:
+  - CreateCharacter: probes /api/health with 1.5s timeout; on failure runs an honest demo path; fetches /api/characters/providers (live) or synthesizes {demo, openai} (demo); renders Tabs(Text/Selfie/Upload) + a "Your characters" grid below; mounts a single LivenessDialog controlled by activeLivenessId.
+  - useEngineProbe / useProviders — small hooks; both shared with the Studio panel via the store.
+  - TextTab: name + prompt textarea + ProviderSelect + conditional ApiKeyField (only when requires_key) + Generate button. On submit: real engine POST /api/characters/generate (30s timeout) → addCreated(); demo path → sleep 2s → addCreated(simulated:true). Errors rendered as amber Alert.
+  - SelfieTab: name + FileDrop (drag/drop + click, image/*) + ProviderSelect + ApiKeyField + Transfer button. Pre-submission Alert explains the description-based-not-pixel-level limitation. POST /api/characters/transfer with selfie_b64 (data URL) → addCreated().
+  - UploadTab: name + FileDrop (image/png only, validates PNG and shows amber hint if not) + Upload button. Pre-submission Alert notes "starts locked — complete liveness". POST /api/characters/upload.
+  - CreatedCharacterCard: shows gradient thumb + Lock/LockOpen badge + "Simulated" badge if applicable + Complete-liveness CTA (only when locked).
+  - LivenessDialog: opens when activeLivenessId set. Auto-requests a challenge (real: POST /api/consent/liveness/request; demo: hardcoded ["look_left","look_right","smile"] after 700ms). Shows motion steps as a numbered list, a faux camera preview area with Start camera button, then "I've done the motions — Verify" button → drives a Progress bar through verify (real: POST /api/consent/liveness/verify with detected_steps echoed back + landmark_evidence; demo: sleep 1.5s → pass), then bind (real: POST /api/characters/{id}/consent/bind; demo: sleep 600ms), then onBound flips consented=true in the store. Clearly labeled "Simulated" badge throughout demo mode.
+- Updated src/components/studio/studio-panel.tsx — replaced local characters/selectedId React state with useCharacterStore. New CharacterPickerButton: disabled when locked (non-stock + consented=false), shows a small "locked" amber badge with Lock icon and a Tooltip "Complete liveness first"; selectable chars show a rose "custom" badge when source is generated/uploaded. Picker header shows "some locked" hint when applicable. Engine probe now calls setEngineConnected + setStockFromEngine (keeps client-created chars when replacing stock from engine). EngineBadge + SinkToggle + CharacterThumb + PreviewArea + StatsGrid + StatTile all preserved from Phase 1 with minor UiCharacter type swaps.
+- Updated src/components/architecture/studio-section.tsx — composes CreateCharacter above StudioPanel, with a one-line note that generated chars appear in the picker automatically.
+- Updated src/components/architecture/roadmap.tsx — Phase 2 card: badge → "SHIPPED · engine + UI" (emerald tone), body rewritten to reflect what actually shipped (three routes, BYOK, consent binding, 46 tests pass), timeline node swapped to a CheckCircle2 emerald icon. Added a rose-toned callout under the Phase 2 card with the honest limitation: "Selfie→anime is NOT pixel-level identity transfer. The engine uses a VLM to describe the selfie, then forwards that description to the image model. Real identity-preserving img2img is Phase 3+." Phases 3-5 unchanged (still outlines).
+- Lint: clean (0 errors, 0 warnings) after removing two unused eslint-disable directives and fixing the alias typo.
+- Dev server: clean compile after the tsconfig alias change. `GET / 200` confirmed; rendered HTML contains "Create a character", "Text → Character", "Selfie → Character", "SHIPPED", "Phase 2". The 500 in dev.log was a transient error from before the alias fix; the next compile is clean.
+
+Stage Summary:
+- Phase 2 UI is wired end-to-end against the engine API surface (port 3031 via XTransformPort). All Phase 2 endpoints are reachable through engineUrl(): /api/characters/providers, /api/characters/generate, /api/characters/transfer, /api/characters/upload, /api/consent/liveness/request, /api/consent/liveness/verify, /api/characters/{id}/consent/bind.
+- Demo mode (engine not connected — the sandbox state) is honest: simulated generation after ~2s, simulated liveness after ~1.5s, "Simulated" badges everywhere it matters, amber callouts for engine errors. Matches the existing Studio panel's demo-mode honesty.
+- Shared Zustand store keeps the Create panel and the Studio picker in sync: a char created above appears immediately below (locked), and flips to selectable the moment liveness completes.
+- Liveness flow correctly walks the three-stage pipeline (request → verify → bind) in both real and demo modes, with the progress bar + success callout making the bind moment visible.
+- Files created: src/lib/character-store.ts, src/components/studio/create-character.tsx. Files modified: contracts/types.ts, tsconfig.json, src/components/studio/studio-panel.tsx, src/components/architecture/studio-section.tsx, src/components/architecture/roadmap.tsx.
+- Lint: passed. Dev server: compiles cleanly (200 on /).
