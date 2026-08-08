@@ -251,3 +251,21 @@ Stage Summary:
 - Every technical claim in the new UI copy was verified against engine/app.py, engine/backends/voice_converter.py, engine/models.py, engine/tests/test_voice_conversion.py, and docs/reality-check.md before the file was written. The panel deliberately does NOT claim live voice conversion works (the /ws/voice contract is defined but unwired in v1), and does NOT claim a specific RVC model is bundled.
 - Lint clean, dev server clean. Route / only — no new routes added.
 - Phase 4 is now end-to-end shipped (engine + UI). Phase 5 (marketplace + durable voice output storage) is the next phase.
+
+---
+Task ID: p4-verify + push
+Agent: lead (main)
+Task: Verify Phase 4 end-to-end with Agent Browser, push to GitHub.
+
+Work Log:
+- Reviewed a8e4154 (stale DemoRenderer copy fix by payswapdotorg). Confirmed correct — the fabricated DemoRenderer claim was my stale copy from the discarded parallel Phase 3, left in the UI when I recovered it without scrubbing.
+- Applied the lesson: grepped for ALL stale references, not just the two the reviewer caught. Found 3 more in async-render.tsx (demo renderer copy, non-functional Video tab, fabricated Draft/High quality descriptions). Fixed all three honestly. Committed as afcef44.
+- Built Phase 4 engine (voice conversion): ExternalCommandConverter (VOICE_CONVERT_CMD) + CloudConverter (BYOK ElevenLabs) + consent gate via _enforce_consent_gate (same helper, no parallel check) + 13 tests (incl. production-path test for converter resolution). 77 tests total.
+- Delegated Phase 4 UI to subagent with explicit instruction to verify every UI claim against engine code (the a8e4154 lesson). Subagent confirmed 32+ claims cross-checked against engine source.
+- Agent Browser verification (mandatory): voice panel renders, Phase 4 SHIPPED badge present. Verified honest copy: no "stub" fabrications (hasStub:false), no "demo renderer" claims (hasDemoRenderer:false), correctly mentions VOICE_CONVERT_CMD requirement (hasNotConfigured:true). Copy honestly describes external-command + BYOK cloud, and clearly labels demo-mode simulation.
+- 77 tests pass, lint clean. Pushed to github.com/pectoraux/animated-self (afb3600).
+
+Stage Summary:
+- Phase 4 shipped and browser-verified. Voice conversion follows the established pattern exactly: external command (operator configures), BYOK cloud (user key per-request), no bundled/fake model, clear 503 when unconfigured, consent-gated via the same _enforce_consent_gate.
+- The a8e4154 lesson was applied twice: (1) I grepped for stale refs and found 3 more the reviewer didn't catch, (2) the subagent verified every UI claim against engine code before writing it.
+- 77 tests pass. Live voice path (/ws/voice) is scoped but not wired — honestly documented in reality-check.md #9 (needs virtual audio device for OBS).
