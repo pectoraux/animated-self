@@ -68,28 +68,36 @@ engine/
 ├── app.py                 # FastAPI: /ws/live, /api/characters, /api/session, /api/render, /api/consent
 ├── config.py              # env-driven config (ports, checkpoint paths, fps, resolution)
 ├── models.py              # Pydantic API contracts (source of truth, mirrored in contracts/)
+├── consent.py             # liveness challenge/verify + HMAC-signed consent tokens
 ├── pipeline/
 │   ├── pose.py            # MediaPipe blendshapes/transformation_matrix → THA3 pose dict
 │   ├── live_pipeline.py   # pose → THA3 → pyvirtualcam  (the hot loop)
-│   └── render_pipeline.py # audio → diffusion → mp4  (Phase 3 stub)
+│   └── render_pipeline.py # audio → diffusion → mp4  (Phase 3, backgrounded job)
 ├── backends/
-│   ├── tha_poser.py       # THA3 model wrapper (load, source-cache, infer)
-│   └── diffusion_renderer.py  # AniPortrait-style wrapper (Phase 3 stub)
+│   ├── tha_poser.py         # THA3 model wrapper (load, source-cache, infer)
+│   ├── character_gen.py     # BYOK text/selfie → character image (Phase 2)
+│   └── diffusion_renderer.py  # external-command contract for audio-driven
+│                               # diffusion reenactment (Phase 3)
 ├── sinks/
 │   ├── virtual_cam.py     # pyvirtualcam sink (live)
 │   └── file_sink.py       # mp4 writer (async)
 └── characters/
-    ├── registry.py        # stock character loader (id → source image + metadata)
+    ├── registry.py        # stock + generated character registry, consent binding
     └── manifest.json      # stock character list
 ```
 
-## What is runnable now vs research-stage
+## What is runnable now vs. needs external assets
 
-- **Runnable (Phase 1):** landmark→pose mapping, live pipeline, virtual-cam sink,
-  character registry, FastAPI surface, session/render/consent contracts.
-- **Requires external assets to actually run:** the THA3 model weights
-  (`backends/tha_poser.py` loads from `THA3_CHECKPOINT`). Code is real; weights
-  are not redistributable here.
-- **Stubbed (later phases):** `diffusion_renderer.py` (Phase 3),
-  `render_pipeline.py` audio path. The contracts exist; the implementation is
-  a `NotImplementedError` placeholder so the surface is stable.
+- **Runnable as-is:** landmark→pose mapping, live pipeline, virtual-cam sink,
+  character registry (stock + generated), FastAPI surface, the full
+  session/render/consent lifecycle, the render job queue. All covered by
+  `pytest tests/` (61 tests) without any GPU or external model.
+- **Requires external assets to actually run inference:**
+  - THA3 model weights — `backends/tha_poser.py` loads from `THA3_CHECKPOINT`.
+    Code is real; weights are not redistributable here.
+  - An audio-driven diffusion reenactment renderer — `backends/diffusion_renderer.py`
+    shells out to a command you point `DIFFUSION_RENDER_CMD` at (an
+    AniPortrait-style setup, or anything honoring the same contract: takes a
+    reference image + audio file, writes an MP4). We don't bundle or pin one
+    specific research repo's exact CLI flags — see the module docstring for
+    why and for the contract you need to satisfy.

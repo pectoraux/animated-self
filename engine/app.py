@@ -16,8 +16,9 @@ Surface (the control panel talks to this via the gateway with ?XTransformPort=30
     GET  /api/session/{id}/preview.jpg     (only when output=preview)
     POST /api/consent/liveness/request     -> LivenessChallenge
     POST /api/consent/liveness/verify      -> LivenessResult
-    POST /api/render                       -> RenderJob (Phase 3 impl; contract stable now)
+    POST /api/render                       -> RenderJob (Phase 3: audio-driven diffusion, backgrounded)
     GET  /api/render/{job_id}              -> RenderJob
+    GET  /api/render/{job_id}/file          -> MP4 (once status=="done")
 
   WebSocket
     WS   /ws/live?session_id=...           client -> PoseVector (JSON), server -> FrameStats (<=1/s)
@@ -29,13 +30,14 @@ import base64
 import json
 import logging
 import secrets
+import threading
 import time
 from pathlib import Path
 
 import numpy as np
 from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import Response
+from fastapi.responses import FileResponse, Response
 
 from config import cfg
 from consent import (
@@ -54,6 +56,7 @@ from models import (
     LivenessResult,
     LivenessVerifyRequest,
     PoseVector,
+    RenderDriverType,
     RenderJob,
     RenderRequest,
     StartSessionRequest,
@@ -71,7 +74,7 @@ from characters import (
     register_generated_character,
     mark_consented,
 )
-from pipeline import LivePipeline
+from pipeline import LivePipeline, render_pipeline
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 log = logging.getLogger("animated-self")
@@ -236,6 +239,33 @@ def consent_bind(character_id: str, req: ConsentBindRequest) -> Character:
         raise HTTPException(409, str(e))
 
 
+def _enforce_consent_gate(character_id: str, char: Character, consent_token: str | None) -> None:
+    """Shared by start_session and create_render — anywhere a character gets
+    driven, live or rendered. Raises HTTPException if not authorized.
+
+    `consented` is a one-shot flag flipped permanently True by
+    mark_consented() — fine to gate on alone for STOCK characters
+    (pre-consented, never bound to anyone's face, safe to skip forever). It
+    is NOT enough for characters bound to a face_hash: gating on `consented`
+    alone would mean the check only ever runs on the FIRST session after
+    binding, then is skipped forever after, letting ANY valid-but-unrelated
+    token drive it from then on (Phase 2 audit finding). So a bound character
+    re-checks the token's face_hash against the bound hash on EVERY request.
+    """
+    bound_hash = get_bound_face_hash(character_id)
+    if bound_hash is not None:
+        ok, reason = validate_consent_token(consent_token)
+        if not ok:
+            raise HTTPException(403, f"consent required: {reason}")
+        presented_hash = token_face_hash(consent_token)
+        if presented_hash != bound_hash:
+            raise HTTPException(
+                403, "consent token does not match the face this character is bound to"
+            )
+    elif not char.consented:
+        raise HTTPException(403, "consent required for this character")
+
+
 @app.post("/api/session/start", response_model=StartSessionResponse)
 def start_session(req: StartSessionRequest) -> StartSessionResponse:
     chars = {c.id: c for c in list_characters()}
@@ -243,28 +273,7 @@ def start_session(req: StartSessionRequest) -> StartSessionResponse:
         raise HTTPException(404, "character not found")
     char = chars[req.character_id]
 
-    # Consent gate. `consented` is a one-shot flag flipped permanently True by
-    # mark_consented() — it's fine to gate on it alone for STOCK characters
-    # (pre-consented, never bound to anyone's face, safe to skip forever).
-    # It is NOT enough for characters bound to a face_hash: gating on
-    # `consented` alone means the check only ever runs on the FIRST session
-    # after binding, then is skipped on every later request forever, which
-    # would let ANY valid-but-unrelated token drive it from then on (Phase 2
-    # audit finding). So a bound character re-checks the token's face_hash
-    # against the bound hash on EVERY session start, not just until first
-    # bind.
-    bound_hash = get_bound_face_hash(req.character_id)
-    if bound_hash is not None:
-        ok, reason = validate_consent_token(req.consent_token)
-        if not ok:
-            raise HTTPException(403, f"consent required: {reason}")
-        presented_hash = token_face_hash(req.consent_token)
-        if presented_hash != bound_hash:
-            raise HTTPException(
-                403, "consent token does not match the face this character is bound to"
-            )
-    elif not char.consented:
-        raise HTTPException(403, "consent required for this character")
+    _enforce_consent_gate(req.character_id, char, req.consent_token)
 
     session_id = secrets.token_urlsafe(12)
     pipe = LivePipeline(
@@ -349,17 +358,58 @@ def verify_liveness(req: LivenessVerifyRequest) -> LivenessResult:
 
 
 # ---------------------------------------------------------------------------
-# Async render (Phase 3 — contract stable)
+# Async render (Phase 3 — audio-driven diffusion quality mode)
 # ---------------------------------------------------------------------------
+def _render_output_path(job_id: str) -> Path:
+    return Path(cfg.render_output_dir) / f"{job_id}.mp4"
+
+
+def _run_render_job(job_id: str, req: RenderRequest) -> None:
+    job = _render_jobs[job_id]
+    job.status = "running"
+    try:
+        def _progress(p: float) -> None:
+            _render_jobs[job_id].progress = p
+
+        render_pipeline.render(
+            character_id=req.character_id,
+            driver_url=req.driver_url,
+            driver_type=req.driver.value,
+            out_mp4=_render_output_path(job_id),
+            progress=_progress,
+        )
+    except Exception as e:  # noqa: BLE001 — surface any failure on the job, not a 500
+        log.warning("render job %s failed: %s", job_id, e)
+        job.status = "failed"
+        job.error = str(e)
+        return
+    job.status = "done"
+    job.progress = 1.0
+    job.download_url = f"/api/render/{job_id}/file"
+
+
 @app.post("/api/render", response_model=RenderJob)
 def create_render(req: RenderRequest) -> RenderJob:
+    char = get_character(req.character_id)
+    if char is None:
+        raise HTTPException(404, "character not found")
+    _enforce_consent_gate(req.character_id, char, req.consent_token)
+
+    if req.driver != RenderDriverType.AUDIO:
+        raise HTTPException(400, "only driver='audio' is implemented (video re-drive is a later phase)")
+    if req.driver_url.startswith("http://") or req.driver_url.startswith("https://"):
+        raise HTTPException(400, "driver_url must be a local file path — remote URLs aren't fetched")
+    if not Path(req.driver_url).exists():
+        raise HTTPException(400, f"driver_url not found: {req.driver_url}")
+
     job_id = secrets.token_urlsafe(8)
     job = RenderJob(job_id=job_id, status="queued")
     _render_jobs[job_id] = job
-    # Phase 3: hand off to render_pipeline.render(...) in a background task.
-    # For now we surface a clear status so the UI can render the shape.
-    job.status = "failed"
-    job.error = "Diffusion quality mode ships in Phase 3 (contract stable, impl stubbed)."
+
+    # Rendering is slow (minutes) and blocking (subprocess), so it runs on a
+    # background thread rather than in the request or FastAPI's own
+    # threadpool-per-request — the job outlives this request.
+    threading.Thread(target=_run_render_job, args=(job_id, req), daemon=True).start()
     return job
 
 
@@ -369,6 +419,19 @@ def get_render(job_id: str) -> RenderJob:
     if job is None:
         raise HTTPException(404, "job not found")
     return job
+
+
+@app.get("/api/render/{job_id}/file")
+def download_render(job_id: str) -> FileResponse:
+    job = _render_jobs.get(job_id)
+    if job is None:
+        raise HTTPException(404, "job not found")
+    if job.status != "done":
+        raise HTTPException(409, f"render not finished (status={job.status})")
+    out_path = _render_output_path(job_id)
+    if not out_path.exists():
+        raise HTTPException(404, "render file missing on disk")
+    return FileResponse(str(out_path), media_type="video/mp4", filename=f"{job_id}.mp4")
 
 
 # ---------------------------------------------------------------------------

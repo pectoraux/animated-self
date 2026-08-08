@@ -21,14 +21,15 @@ No bones, no mesh, no Live2D layer-tagging.
 animated-self/
 ├── src/                      # Next.js 16 control panel + architecture hub (the / route)
 │   └── app/page.tsx
-├── engine/                   # Python: real-time + async inference (Phase 1 MVP)
+├── engine/                   # Python: real-time + async inference
 │   ├── app.py                # FastAPI: /ws/live, /api/characters, /api/session, /api/render, /api/consent
 │   ├── config.py
+│   ├── consent.py            # liveness challenge/verify + HMAC consent tokens
 │   ├── models.py             # Pydantic API contracts (source of truth)
 │   ├── pipeline/             # pose mapping, live loop, render pipeline
-│   ├── backends/             # THA3 poser + diffusion renderer (Phase 3 stub)
+│   ├── backends/             # THA3 poser + character-gen (BYOK) + diffusion renderer
 │   ├── sinks/                # pyvirtualcam + mp4 writers
-│   └── characters/           # stock character registry + manifest
+│   └── characters/           # stock + generated character registry
 ├── contracts/                # API schema mirrored for TS + OpenAPI
 │   ├── types.ts
 │   └── openapi.yaml
@@ -49,16 +50,24 @@ animated-self/
 > driver). The Python engine is real, runnable code you take to a GPU box. The
 > Next.js app at `/` is the control panel + a full architecture document.
 
-## Phase 1 status
+## Status
 
-- [x] System architecture + data flow (live + async)
-- [x] Repo structure
-- [x] Phase 1 MVP scaffolded: webcam → landmark → THA3 → OBS virtual cam
-- [x] API contracts (capture / inference / output) stable for later phases
-- [x] Phased roadmap (Phase 2–5)
-- [x] Reality-check flags
+- [x] Phase 1 — live path: webcam → landmark → THA3 → OBS virtual cam
+- [x] Phase 1 — API contracts (capture / inference / output) stable for later phases
+- [x] Phase 2 — custom character generation (BYOK text→character, selfie→anime,
+      raw upload) + consent/liveness binding, re-checked on every session start
+      and every render, not just once (see docs/reality-check.md and the
+      commit history for the audit trail on getting this right)
+- [x] Phase 3 — async diffusion quality mode: `/api/render` actually runs a
+      background render job against a user-configured external renderer
+      command (see `engine/backends/diffusion_renderer.py`) and serves the
+      resulting MP4 at `/api/render/{job_id}/file`
 - [ ] THA3 weights bundled (not redistributable — user supplies checkpoint)
-- [ ] Diffusion quality mode (Phase 3, stubbed)
+- [ ] A real audio-driven anime diffusion checkpoint wired up (the render
+      *pipeline* is real and tested; you still have to point
+      `DIFFUSION_RENDER_CMD` at an actual renderer — none is bundled, same
+      reason THA3 weights aren't)
+- [ ] Phase 4 (voice conversion), Phase 5 (marketplace)
 
 ## Run the control panel / architecture hub
 
@@ -72,12 +81,17 @@ See `engine/README.md`.
 
 ## Phased roadmap (outline)
 
-- **Phase 2 — Custom character generation.** BYOK image-gen; text→character and
-  selfie→anime routes; generated PNGs drop into the same registry; consent/
-  liveness binding enforced for custom chars.
-- **Phase 3 — Diffusion quality mode.** AniPortrait-style audio-driven
-  reenactment behind the existing `/api/render` contract; render queue +
-  storage; live path unchanged.
+- **Phase 2 — Custom character generation. Shipped.** BYOK image-gen;
+  text→character and selfie→anime routes; generated PNGs drop into the same
+  registry; consent/liveness binding enforced for custom chars on every
+  session start, not just the first one after binding.
+- **Phase 3 — Diffusion quality mode. Shipped (pipeline; bring your own
+  renderer).** Audio-driven reenactment behind the existing `/api/render`
+  contract: a background job runs an operator-configured external command
+  (`DIFFUSION_RENDER_CMD`) — see `engine/backends/diffusion_renderer.py` for
+  why this is a command contract rather than a hardcoded integration with one
+  specific research repo — and the finished MP4 is served back over the API.
+  The same consent gate as live sessions applies. Live path unchanged.
 - **Phase 4 — Voice conversion.** Optional RVC-style mic→avatar-voice stage;
   ~20–40ms added to live; BYOK for cloud voice models.
 - **Phase 5 — Marketplace.** Discoverable stock + creator-published character

@@ -31,6 +31,14 @@ output. Anyone claiming real-time diffusion anime reenactment is either using a
 heavily distilled model with poor quality or is misrepresenting throughput.
 Phase 3 is explicitly **offline**. We never route it through the live WS.
 
+Phase 3's render *pipeline* (job queue, consent gate, progress tracking, MP4
+delivery) is real, tested, and shipped — what's still on you is the model
+itself. `backends/diffusion_renderer.py` runs whatever external command you
+configure via `DIFFUSION_RENDER_CMD`; we don't bundle a checkpoint or pin a
+specific research repo's CLI, for the same reason THA3's weights aren't
+bundled — we can't verify or redistribute it here. Point it at a real
+AniPortrait-style setup and the pipeline around it works end to end.
+
 ## 5. THA3 degrades outside training distribution
 Large head yaw/pitch (>~0.5 rad), hands entering frame, extreme expressions
 produce artifacts. Live mode will show these on wild movement; the async

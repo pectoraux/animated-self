@@ -43,8 +43,19 @@ class EngineConfig:
     virtual_cam_device: str | None = os.getenv("VIRTUAL_CAM_DEVICE") or None
     virtual_cam_backend: str | None = os.getenv("VIRTUAL_CAM_BACKEND") or None  # "obs"|"v4l2loopback"|"unitycapture"
 
-    # --- Async render path (Phase 3; stubbed now) ---
+    # --- Async render path (Phase 3) ---
+    # Reserved for a future direct in-process integration once a diffusion
+    # reenactment model ships a stable Python API. Not used by the current
+    # subprocess-contract renderer (see DIFFUSION_RENDER_CMD below).
     diffusion_checkpoint: str | None = os.getenv("DIFFUSION_CHECKPOINT")
+    # Audio-driven diffusion reenactment (AniPortrait-style) ships as research
+    # repos run via CLI scripts, not stable pip packages — there's no single
+    # Python API to call. Rather than hardcode one specific repo's flags
+    # (which drift release to release), DIFFUSION_RENDER_CMD is a command
+    # template YOU point at whatever renderer you've set up locally. See
+    # engine/backends/diffusion_renderer.py for the exact contract.
+    diffusion_render_cmd: str | None = os.getenv("DIFFUSION_RENDER_CMD")
+    diffusion_render_timeout_s: int = int(os.getenv("DIFFUSION_RENDER_TIMEOUT_S", "1800"))
     render_output_dir: str = os.getenv(
         "RENDER_OUTPUT_DIR", str(ENGINE_ROOT / ".." / "render-output")
     )
