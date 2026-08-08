@@ -83,6 +83,13 @@ def _capabilities() -> dict[str, bool]:
 
 @app.on_event("startup")
 def _startup() -> None:
+    if not cfg.consent_secret:
+        log.warning(
+            "CONSENT_SECRET is not set. Consent tokens will be signed with a "
+            "random key generated for this process only — fine for local "
+            "dev, but set CONSENT_SECRET before any deployment where consent "
+            "must persist across restarts or multiple instances."
+        )
     try:
         poser.load()
         log.info("THA3 poser loaded: %s", poser.loaded)

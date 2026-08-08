@@ -136,3 +136,46 @@ def test_liveness_skipped_with_bogus_token_is_blocked():
     ok, reason = consent.validate_consent_token("x")
     assert not ok
     assert "required" in (reason or "") or "signature" in (reason or "")
+
+
+def test_fallback_secret_is_not_the_old_known_literal():
+    # Regression: the fallback used to be a fixed string committed to the
+    # public repo (b"animated-self-dev-insecure-key"), so anyone could forge
+    # a validly-signed token without running the liveness challenge at all.
+    assert consent._FALLBACK_SECRET != b"animated-self-dev-insecure-key"
+    assert len(consent._FALLBACK_SECRET) >= 32
+
+
+def test_forged_token_with_old_known_key_is_rejected():
+    # Simulate an attacker who knows the *old* hardcoded fallback and tries
+    # to forge a token with it. Must be rejected now that the real fallback
+    # is random and unknown to them.
+    import base64
+    import hmac
+    import json as _json
+
+    payload = {"cid": "forged", "fh": "x", "iat": 0, "exp": 9999999999}
+    body = base64.urlsafe_b64encode(
+        _json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
+    ).rstrip(b"=").decode()
+    forged_sig = base64.urlsafe_b64encode(
+        hmac.new(b"animated-self-dev-insecure-key", body.encode(), consent.hashlib.sha256).digest()
+    ).rstrip(b"=").decode()
+    forged_token = f"{body}.{forged_sig}"
+
+    ok, reason = consent.validate_consent_token(forged_token)
+    assert not ok
+    assert "signature" in (reason or "")
+
+
+def test_missing_secret_warns_once(monkeypatch, caplog):
+    # cfg is a frozen dataclass; swap the module-level reference instead.
+    from types import SimpleNamespace
+
+    monkeypatch.setattr(consent, "cfg", SimpleNamespace(consent_secret=""))
+    monkeypatch.setattr(consent, "_warned_insecure", False)
+    with caplog.at_level("WARNING", logger="animated-self.consent"):
+        consent._server_secret()
+        consent._server_secret()
+    warnings = [r for r in caplog.records if "CONSENT_SECRET" in r.message]
+    assert len(warnings) == 1  # only warns once, not on every call

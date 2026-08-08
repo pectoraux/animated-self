@@ -28,6 +28,7 @@ import base64
 import hashlib
 import hmac
 import json
+import logging
 import secrets
 import threading
 import time
@@ -35,6 +36,18 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from config import cfg
+
+log = logging.getLogger("animated-self.consent")
+
+# Fallback HMAC key, used only when CONSENT_SECRET is not set in the
+# environment. This used to be a fixed string literal committed to the repo
+# (`b"animated-self-dev-insecure-key"`) — anyone reading the public source
+# could forge a validly-signed consent_token without ever running the
+# liveness challenge, and nothing warned about it. Generating a random key
+# per process closes that: tokens still won't survive a restart (same as
+# before, by design), but they can no longer be forged from source alone.
+_FALLBACK_SECRET = secrets.token_bytes(32)
+_warned_insecure = False
 
 
 # Challenge step banks. The verifier checks the client's detected_steps against
@@ -105,14 +118,24 @@ def _b64u_decode(s: str) -> bytes:
 
 
 def _server_secret() -> bytes:
-    """HMAC key. In dev we derive a stable per-process key from CONSENT_SECRET
-    or fall back to a generated one (logged once). Phase 2 should set
-    CONSENT_SECRET in the environment so tokens survive restarts."""
+    """HMAC key. Set CONSENT_SECRET in the environment so tokens survive
+    restarts and aren't forgeable from source. Without it we fall back to a
+    random key generated once per process — tokens still won't survive a
+    restart (by design, so leaked dev tokens don't persist), but unlike the
+    old fixed-string fallback, this one can't be reproduced by anyone who's
+    read the repo."""
+    global _warned_insecure
     sec = getattr(cfg, "consent_secret", None) or ""
     if not sec:
-        # Stable enough for a single dev session; rotate on restart by design
-        # so leaked dev tokens don't persist.
-        return b"animated-self-dev-insecure-key"
+        if not _warned_insecure:
+            log.warning(
+                "CONSENT_SECRET is not set — consent tokens are signed with a "
+                "random per-process key and will NOT survive a restart or be "
+                "valid across multiple engine instances. Set CONSENT_SECRET "
+                "before deploying anywhere consent needs to persist."
+            )
+            _warned_insecure = True
+        return _FALLBACK_SECRET
     return sec.encode("utf-8")
 
 
