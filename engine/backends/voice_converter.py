@@ -27,6 +27,7 @@ from __future__ import annotations
 
 import logging
 import os
+import shlex
 import subprocess
 import tempfile
 import urllib.request
@@ -49,6 +50,7 @@ class VoiceConverter(Protocol):
         input_audio: Path,
         output_audio: Path,
         progress: Callable[[float], None] | None = None,
+        api_key: str | None = None,
     ) -> Path: ...
 
 
@@ -96,8 +98,13 @@ class ExternalCommandConverter:
             )
         cmd = self._cmd.format(input=str(input_audio), output=str(output_audio))
         log.info("running voice conversion: %s", cmd[:120])
+        # No shell=True: input/output are engine-generated safe paths today,
+        # but shell=True is a latent injection surface the moment anything
+        # user-influenced ever gets threaded into this template. diffusion_
+        # renderer.py made the same call for the same reason — keep both
+        # external-command backends on the same footing.
         result = subprocess.run(
-            cmd, shell=True, capture_output=True, text=True, timeout=600,
+            shlex.split(cmd), capture_output=True, text=True, timeout=600,
         )
         if result.returncode != 0:
             raise RuntimeError(

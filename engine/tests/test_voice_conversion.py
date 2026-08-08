@@ -128,6 +128,24 @@ def test_external_command_converter_fails_on_missing_output(tmp_path):
         c.convert(inp, out)
 
 
+def test_external_command_converter_does_not_use_a_shell(tmp_path):
+    """Regression guard: VOICE_CONVERT_CMD must run as argv, not through a
+    shell. If shell metacharacters were interpreted, 'cp {input} {output} ;
+    echo pwned' would run `cp` and then separately `echo pwned` (both
+    exiting 0). Without a shell, ';', 'echo', and 'pwned' are just extra
+    argv tokens handed to `cp`, which errors on the unexpected operands —
+    proving no shell command chaining is possible via this template.
+    """
+    c = vc_mod.ExternalCommandConverter()
+    os.environ["VOICE_CONVERT_CMD"] = "cp {input} {output} ; echo pwned"
+    c.load()
+    inp = tmp_path / "in.wav"
+    inp.write_bytes(b"x")
+    out = tmp_path / "out.wav"
+    with pytest.raises(RuntimeError, match="exit"):
+        c.convert(inp, out)
+
+
 # --------------------------------------------------------------------------- consent gate on voice convert
 def test_voice_convert_503_when_unconfigured(client, monkeypatch):
     monkeypatch.delenv("VOICE_CONVERT_CMD", raising=False)
