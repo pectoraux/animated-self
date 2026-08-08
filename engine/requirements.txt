@@ -35,3 +35,7 @@ python-dotenv==1.0.1
 # Utilities
 pyyaml==6.0.2
 tqdm==4.67.1
+
+# Dev / tests (tests/ uses FastAPI's TestClient, which needs httpx)
+pytest==8.3.4
+httpx==0.28.1

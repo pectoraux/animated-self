@@ -53,8 +53,15 @@ class LivePipeline:
         if self.poser is not None:
             return self.poser
         # Late import so importing this module doesn't drag torch in for tests.
+        # `backends.poser` is already the ThaPoser singleton instance (see
+        # backends/__init__.py: `from .tha_poser import poser`) — not a module
+        # with a `.poser` attribute. The old `_poser_mod.poser` here raised
+        # AttributeError on every real session start (app.py never passes a
+        # poser= explicitly, so this fallback branch is always what runs in
+        # production; the DI unit tests inject a FakePoser directly and never
+        # exercised this branch, which is how it went uncaught).
         from backends import poser as _poser_mod
-        return _poser_mod.poser
+        return _poser_mod
 
     def start(self, reference_rgb: np.ndarray) -> None:
         """Cache the source image and open the output sink."""

@@ -226,6 +226,15 @@ def _is_ordered_subsequence(detected: list[str], expected: list[str]) -> bool:
     return all(d in it for d in detected)
 
 
+def token_face_hash(token: str | None) -> str | None:
+    """Extract the face_hash bound into a token, without checking expiry or
+    signature validity — callers must call validate_consent_token first."""
+    if not token:
+        return None
+    payload = _verify_sig(token)
+    return (payload or {}).get("fh")
+
+
 def validate_consent_token(token: str | None) -> tuple[bool, str | None]:
     """Returns (ok, reason). Used by start_session for non-consented chars."""
     if not token:

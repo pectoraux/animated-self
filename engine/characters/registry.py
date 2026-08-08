@@ -32,6 +32,13 @@ log = logging.getLogger("animated-self.characters")
 _STOCK_MANIFEST: dict[str, Any] | None = None
 
 
+class AlreadyConsentedError(Exception):
+    """Raised when consent-binding a character that's already bound to a
+    different face_hash. Rebinding to the SAME hash is a harmless no-op
+    (e.g. a creator re-running liveness); rebinding to a DIFFERENT hash would
+    silently hijack someone else's avatar, so it's refused."""
+
+
 def _stock_manifest_path() -> Path:
     return cfg.characters_dir / "manifest.json"
 
@@ -151,15 +158,36 @@ def register_generated_character(
     return _to_character(entry)
 
 
+def get_bound_face_hash(character_id: str) -> str | None:
+    """The face_hash a generated/uploaded character is bound to, or None if
+    unbound, unknown, or a stock character (stock chars aren't bound to any
+    face — they're pre-consented because they're not a real likeness)."""
+    raw = next((c for c in _all_raw() if c["id"] == character_id), None)
+    if raw is None:
+        return None
+    return raw.get("bound_face_hash")
+
+
 def mark_consented(character_id: str, face_hash: str) -> Character:
     """Bind a generated character to a face_hash after liveness. Only works
-    for generated/uploaded chars (stock are pre-consented and immutable)."""
+    for generated/uploaded chars (stock are pre-consented and immutable).
+
+    Refuses to rebind a character that's already bound to a DIFFERENT face —
+    without this, anyone with a valid consent_token of their own could call
+    this endpoint on someone else's character_id and silently hijack the
+    binding. Rebinding with the SAME hash is a harmless no-op.
+    """
     data = _load_generated_manifest()
     entry = next((c for c in data.get("characters", []) if c["id"] == character_id), None)
     if entry is None:
         raise KeyError(
             f"Cannot consent-bind stock or unknown character: {character_id}. "
             "Only generated/uploaded chars are eligible."
+        )
+    existing = entry.get("bound_face_hash")
+    if entry.get("consented") and existing and existing != face_hash:
+        raise AlreadyConsentedError(
+            f"Character {character_id} is already consent-bound to a different face."
         )
     entry["consented"] = True
     entry["bound_face_hash"] = face_hash

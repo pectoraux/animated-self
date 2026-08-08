@@ -40,6 +40,7 @@ from fastapi.responses import Response
 from config import cfg
 from consent import (
     issue_challenge,
+    token_face_hash,
     validate_consent_token,
     verify_challenge,
 )
@@ -62,9 +63,11 @@ from models import (
 )
 from backends import poser, get_provider, list_providers
 from characters import (
+    AlreadyConsentedError,
     list_characters,
     get_character,
     get_character_image,
+    get_bound_face_hash,
     register_generated_character,
     mark_consented,
 )
@@ -224,14 +227,13 @@ def consent_bind(character_id: str, req: ConsentBindRequest) -> Character:
     ok, reason = validate_consent_token(req.consent_token)
     if not ok:
         raise HTTPException(403, f"invalid consent token: {reason}")
-    # Extract the face_hash from the token payload for the binding record.
-    from consent import _verify_sig
-    payload = _verify_sig(req.consent_token)
-    face_hash = (payload or {}).get("fh", "")
+    face_hash = token_face_hash(req.consent_token) or ""
     try:
         return mark_consented(character_id, face_hash)
     except KeyError as e:
         raise HTTPException(404, str(e))
+    except AlreadyConsentedError as e:
+        raise HTTPException(409, str(e))
 
 
 @app.post("/api/session/start", response_model=StartSessionResponse)
@@ -241,14 +243,28 @@ def start_session(req: StartSessionRequest) -> StartSessionResponse:
         raise HTTPException(404, "character not found")
     char = chars[req.character_id]
 
-    # Consent gate (finding #1 fix): non-consented (custom) characters require
-    # a VALID consent token — signature, expiry, and single-use challenge are
-    # all checked in consent.validate_consent_token(). Any non-empty string no
-    # longer passes.
-    if not char.consented:
+    # Consent gate. `consented` is a one-shot flag flipped permanently True by
+    # mark_consented() — it's fine to gate on it alone for STOCK characters
+    # (pre-consented, never bound to anyone's face, safe to skip forever).
+    # It is NOT enough for characters bound to a face_hash: gating on
+    # `consented` alone means the check only ever runs on the FIRST session
+    # after binding, then is skipped on every later request forever, which
+    # would let ANY valid-but-unrelated token drive it from then on (Phase 2
+    # audit finding). So a bound character re-checks the token's face_hash
+    # against the bound hash on EVERY session start, not just until first
+    # bind.
+    bound_hash = get_bound_face_hash(req.character_id)
+    if bound_hash is not None:
         ok, reason = validate_consent_token(req.consent_token)
         if not ok:
             raise HTTPException(403, f"consent required: {reason}")
+        presented_hash = token_face_hash(req.consent_token)
+        if presented_hash != bound_hash:
+            raise HTTPException(
+                403, "consent token does not match the face this character is bound to"
+            )
+    elif not char.consented:
+        raise HTTPException(403, "consent required for this character")
 
     session_id = secrets.token_urlsafe(12)
     pipe = LivePipeline(
