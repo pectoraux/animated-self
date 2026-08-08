@@ -65,6 +65,9 @@ from models import (
     UploadCharacterRequest,
     VoiceConvertRequest,
     VoiceConvertResult,
+    MarketplaceListing,
+    PublishRequest,
+    ReviewActionRequest,
 )
 from backends import poser, get_provider, list_providers
 from backends.voice_converter import get_converter
@@ -507,6 +510,143 @@ def voice_download(out_id: str) -> FileResponse:
     if p is None or not p.exists():
         raise HTTPException(404, "voice output not found")
     return FileResponse(str(p), media_type="audio/wav", filename=f"voice-{out_id}.wav")
+
+
+# ---------------------------------------------------------------------------
+# Phase 5 — marketplace
+# ---------------------------------------------------------------------------
+# Discoverable character packs. The inference stack is UNTOUCHED — a marketplace
+# character is just a registry entry + a signed consent artifact.
+#
+# Consent gate: publish goes through _enforce_consent_gate (same helper as
+# live/render/voice — no parallel check). Only the creator who bound the
+# character can publish it. The bound_face_hash is recorded on the listing
+# as an audit trail but does NOT transfer to installers — installing creates
+# a new unconsented character that the installer must bind to their own face.
+#
+# Review pipeline: pHash near-duplicate flag at publish time + manual
+# approve/reject. NOT automated moderation — see docs/reality-check.md #11.
+
+from marketplace import phash as mphash, review as mreview, store as mstore
+
+
+def _listing_to_response(raw: dict) -> MarketplaceListing:
+    return MarketplaceListing(
+        listing_id=raw["listing_id"],
+        publisher_id=raw["publisher_id"],
+        character_name=raw["character_name"],
+        character_tags=raw.get("character_tags", []),
+        thumbnail_url=f"/api/marketplace/{raw['listing_id']}/thumbnail",
+        review_status=raw["review_status"],
+        flagged=raw.get("flagged", False),
+        flag_reason=raw.get("flag_reason"),
+        published_at=raw["published_at"],
+        reviewed_at=raw.get("reviewed_at"),
+        reviewer_id=raw.get("reviewer_id"),
+    )
+
+
+@app.post("/api/marketplace/publish", response_model=MarketplaceListing)
+def marketplace_publish(req: PublishRequest) -> MarketplaceListing:
+    """Publish a consented character to the marketplace.
+
+    Consent-gated: the consent_token must match the character's
+    bound_face_hash. The character's image + metadata are COPIED into the
+    listing (immutable after publish). The publisher's bound_face_hash is
+    recorded as an audit trail.
+    """
+    char = get_character(req.character_id)
+    if char is None:
+        raise HTTPException(404, "character not found")
+    _enforce_consent_gate(req.character_id, char, req.consent_token)
+
+    # Get the character image bytes.
+    import cv2
+    rgb = get_character_image(req.character_id)
+    ok, png_buf = cv2.imencode(".png", rgb[:, :, ::-1])
+    if not ok:
+        raise HTTPException(500, "failed to encode character image")
+    image_png = png_buf.tobytes()
+
+    # Compute pHash and check for near-duplicates.
+    new_phash = mphash.compute_phash(image_png)
+    flagged, flag_reason = mreview.flag_at_publish(new_phash)
+    final_status = mreview.auto_approve_unflagged({"flagged": flagged})
+
+    listing = mstore.create_listing(
+        publisher_id=req.publisher_id,
+        character_name=char.name,
+        character_image_png=image_png,
+        character_tags=char.tags,
+        bound_face_hash=get_bound_face_hash(req.character_id) or "",
+        phash=new_phash,
+        flagged=flagged,
+        flag_reason=flag_reason,
+    )
+    # Auto-approve unflagged listings; flagged ones stay pending for review.
+    if final_status == "approved":
+        mstore.set_review_status(listing["listing_id"], "approved", "system-auto")
+        listing["review_status"] = "approved"
+
+    return _listing_to_response({**listing, "review_status": listing["review_status"]})
+
+
+@app.get("/api/marketplace", response_model=list[MarketplaceListing])
+def marketplace_list() -> list[MarketplaceListing]:
+    """List approved marketplace listings."""
+    return [_listing_to_response(l) for l in mstore.list_approved()]
+
+
+@app.get("/api/marketplace/pending", response_model=list[MarketplaceListing])
+def marketplace_pending() -> list[MarketplaceListing]:
+    """List pending listings awaiting review (manual review queue)."""
+    return [_listing_to_response(l) for l in mstore.list_pending()]
+
+
+@app.get("/api/marketplace/{listing_id}/thumbnail")
+def marketplace_thumbnail(listing_id: str) -> FileResponse:
+    p = mstore.get_listing_image(listing_id)
+    if p is None:
+        raise HTTPException(404, "listing not found")
+    return FileResponse(str(p), media_type="image/png")
+
+
+@app.post("/api/marketplace/{listing_id}/install", response_model=Character)
+def marketplace_install(listing_id: str) -> Character:
+    """Install a marketplace character into the local registry.
+
+    Creates a NEW unconsented character — the publisher's bound_face_hash
+    does NOT transfer. The installer must run their own liveness to drive it.
+    """
+    listing = mstore.get_listing(listing_id)
+    if listing is None:
+        raise HTTPException(404, "listing not found")
+    if listing["review_status"] != "approved":
+        raise HTTPException(403, "listing not approved for install")
+    p = mstore.get_listing_image(listing_id)
+    if p is None:
+        raise HTTPException(404, "listing image missing")
+    from models import CharacterSource
+    return register_generated_character(
+        name=listing["character_name"],
+        image_png_bytes=p.read_bytes(),
+        source=CharacterSource.UPLOADED,
+        tags=list(listing.get("character_tags", [])) + ["marketplace"],
+    )
+
+
+@app.post("/api/marketplace/{listing_id}/review", response_model=MarketplaceListing)
+def marketplace_review(listing_id: str, req: ReviewActionRequest) -> MarketplaceListing:
+    """Approve or reject a pending listing. Manual review only."""
+    listing = mstore.get_listing(listing_id)
+    if listing is None:
+        raise HTTPException(404, "listing not found")
+    if listing["review_status"] != "pending":
+        raise HTTPException(409, f"listing already {listing['review_status']}")
+    updated = mstore.set_review_status(listing_id, req.status, req.reviewer_id, req.reason)
+    if updated is None:
+        raise HTTPException(404, "listing not found")
+    return _listing_to_response(updated)
 
 
 # ---------------------------------------------------------------------------

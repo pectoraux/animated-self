@@ -265,3 +265,45 @@ class VoiceConvertResult(BaseModel):
     # URL to fetch the converted audio (valid for the process lifetime).
     download_url: str | None = None
     error: str | None = None
+
+
+# ---------------------------------------------------------------------------
+# Phase 5 — marketplace
+# ---------------------------------------------------------------------------
+
+class MarketplaceListing(BaseModel):
+    """A published character pack. The character image + metadata are copied
+    in at publish time; the listing is immutable after that. bound_face_hash
+    is the PUBLISHER's face hash (audit trail) and does NOT transfer to
+    installers — installing creates a new unconsented character."""
+    listing_id: str
+    publisher_id: str
+    character_name: str
+    character_tags: list[str] = Field(default_factory=list)
+    thumbnail_url: str
+    review_status: Literal["pending", "approved", "rejected"] = "pending"
+    flagged: bool = False
+    flag_reason: str | None = None
+    published_at: int
+    reviewed_at: int | None = None
+    reviewer_id: str | None = None
+
+
+class PublishRequest(BaseModel):
+    """Publish a consented character to the marketplace.
+
+    The consent_token must match the character's bound_face_hash — only the
+    creator who bound it can publish it. The bound_face_hash is recorded on
+    the listing as an audit trail (who published this), but it does NOT
+    transfer to installers."""
+    character_id: str
+    publisher_id: str
+    consent_token: str
+
+
+class ReviewActionRequest(BaseModel):
+    """Approve or reject a pending listing. Manual review only — the
+    automated pHash flag happens at publish time (see marketplace/review.py)."""
+    status: Literal["approved", "rejected"]
+    reviewer_id: str
+    reason: str | None = None

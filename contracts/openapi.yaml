@@ -115,6 +115,81 @@ paths:
         "200": { description: wav, content: { audio/wav: { schema: { type: string, format: binary } } } }
         "404": { description: out_id unknown or process restarted }
 
+  /api/marketplace:
+    get:
+      summary: |
+        Phase 5 — list approved marketplace listings. Pending listings are NOT
+        included (use /api/marketplace/pending for the review queue). Returns
+        MarketplaceListing[].
+      responses:
+        "200": { description: list, content: { application/json: { schema: { type: array, items: { $ref: "#/components/schemas/MarketplaceListing" } } } } }
+
+  /api/marketplace/pending:
+    get:
+      summary: |
+        Phase 5 — list pending listings awaiting manual review (the review
+        queue). Approved/rejected listings are NOT included.
+      responses:
+        "200": { description: list, content: { application/json: { schema: { type: array, items: { $ref: "#/components/schemas/MarketplaceListing" } } } } }
+
+  /api/marketplace/publish:
+    post:
+      summary: |
+        Phase 5 — publish a consented character to the marketplace. Consent-
+        gated via the same _enforce_consent_gate as live, async render, and
+        voice — the consent_token's face_hash must match the character's
+        bound_face_hash. The character PNG + metadata are COPIED into an
+        immutable listing; the publisher's bound_face_hash is recorded as an
+        audit trail. At publish time the engine computes a 64-bit pHash of
+        the PNG and compares it against every approved listing; near-
+        duplicates are flagged and stay pending, unflagged listings auto-
+        approve.
+      requestBody:
+        required: true
+        content:
+          application/json: { schema: { $ref: "#/components/schemas/PublishRequest" } }
+      responses:
+        "200": { description: listing, content: { application/json: { schema: { $ref: "#/components/schemas/MarketplaceListing" } } } }
+        "403": { description: consent gate refused (locked char or token face_hash mismatch) }
+        "404": { description: character not found }
+
+  /api/marketplace/{listing_id}/thumbnail:
+    get:
+      summary: Listing character PNG (the image copied at publish time)
+      parameters: [ { name: listing_id, in: path, required: true, schema: { type: string } } ]
+      responses: { "200": { description: png }, "404": { description: not found } }
+
+  /api/marketplace/{listing_id}/install:
+    post:
+      summary: |
+        Phase 5 — install a marketplace listing into the local registry.
+        Creates a NEW unconsented character — the publisher's binding does
+        NOT transfer (the installer must run their own liveness to drive it).
+        The new character is registered with source=uploaded and an extra
+        "marketplace" tag.
+      parameters: [ { name: listing_id, in: path, required: true, schema: { type: string } } ]
+      responses:
+        "200": { description: new character, content: { application/json: { schema: { $ref: "#/components/schemas/Character" } } } }
+        "403": { description: listing not approved for install }
+        "404": { description: listing or its image not found }
+
+  /api/marketplace/{listing_id}/review:
+    post:
+      summary: |
+        Phase 5 — manual approve/reject a pending listing. The automated
+        pHash flag happens at publish time; this endpoint is the manual
+        judgment call. status=approved makes the listing installable;
+        status=rejected keeps it visible to moderators but uninstallable.
+      parameters: [ { name: listing_id, in: path, required: true, schema: { type: string } } ]
+      requestBody:
+        required: true
+        content:
+          application/json: { schema: { $ref: "#/components/schemas/ReviewActionRequest" } }
+      responses:
+        "200": { description: updated listing, content: { application/json: { schema: { $ref: "#/components/schemas/MarketplaceListing" } } } }
+        "404": { description: listing not found }
+        "409": { description: listing already approved or rejected }
+
 components:
   schemas:
     Character:
@@ -218,3 +293,46 @@ components:
         ok: { type: boolean }
         download_url: { type: string, nullable: true }
         error: { type: string, nullable: true }
+    MarketplaceListing:
+      type: object
+      description: |
+        Phase 5 — a published character pack. The character image + metadata
+        are COPIED into the listing at publish time; the listing is immutable
+        after that. The publisher's bound_face_hash is recorded on the listing
+        as an audit trail (who published this) but does NOT transfer to
+        installers — installing creates a NEW unconsented character.
+      properties:
+        listing_id: { type: string }
+        publisher_id: { type: string }
+        character_name: { type: string }
+        character_tags: { type: array, items: { type: string } }
+        thumbnail_url: { type: string, description: "/api/marketplace/{listing_id}/thumbnail" }
+        review_status: { type: string, enum: [pending, approved, rejected] }
+        flagged: { type: boolean, description: "True when the publish-time pHash near-duplicate check flagged this listing." }
+        flag_reason: { type: string, nullable: true, description: "Engine explanation when flagged (e.g. near-duplicate Hamming distance)." }
+        published_at: { type: integer, description: "ms epoch" }
+        reviewed_at: { type: integer, nullable: true }
+        reviewer_id: { type: string, nullable: true }
+    PublishRequest:
+      type: object
+      description: |
+        Phase 5 — publish a consented character. The consent_token must match
+        the character's bound_face_hash (only the creator who bound it can
+        publish it). The bound_face_hash is recorded on the listing as an
+        audit trail but does NOT transfer to installers.
+      properties:
+        character_id: { type: string }
+        publisher_id: { type: string }
+        consent_token: { type: string }
+    ReviewActionRequest:
+      type: object
+      description: |
+        Phase 5 — manual approve/reject a pending listing. The automated pHash
+        flag happens at publish time (see marketplace/review.py). status=
+        approved makes the listing installable; rejected keeps it visible to
+        moderators but uninstallable. The engine returns 409 if the listing
+        isn't currently pending.
+      properties:
+        status: { type: string, enum: [approved, rejected] }
+        reviewer_id: { type: string }
+        reason: { type: string, nullable: true }

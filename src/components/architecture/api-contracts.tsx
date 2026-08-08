@@ -30,6 +30,12 @@ const endpoints: {
   { method: "GET", path: "/api/render/{job_id}", purpose: "poll job" },
   { method: "POST", path: "/api/voice/convert", purpose: "convert audio → avatar voice (Phase 4, consent-gated, 503 if unconfigured)" },
   { method: "GET", path: "/api/voice/{out_id}/download", purpose: "download converted WAV (Phase 4)" },
+  { method: "GET", path: "/api/marketplace", purpose: "list approved marketplace listings (Phase 5)" },
+  { method: "GET", path: "/api/marketplace/pending", purpose: "list pending listings awaiting review (Phase 5)" },
+  { method: "POST", path: "/api/marketplace/publish", purpose: "publish a consented character to the marketplace (Phase 5, consent-gated via _enforce_consent_gate)" },
+  { method: "GET", path: "/api/marketplace/{listing_id}/thumbnail", purpose: "listing character PNG (Phase 5)" },
+  { method: "POST", path: "/api/marketplace/{listing_id}/install", purpose: "install a listing → new unconsented character (Phase 5, binding does NOT transfer)" },
+  { method: "POST", path: "/api/marketplace/{listing_id}/review", purpose: "manual approve/reject a pending listing (Phase 5)" },
 ];
 
 const methodColor: Record<string, string> = {

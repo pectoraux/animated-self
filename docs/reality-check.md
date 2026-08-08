@@ -81,3 +81,27 @@ or verify a specific RVC model. Quality varies wildly between RVC forks and
 voice models — some sound robotic, some are indistinguishable. The engine
 provides the pipeline (convert, consent-gate, download); the model is
 bring-your-own, same as THA3 weights and DIFFUSION_RENDER_CMD.
+
+## 11. Marketplace review is automated flagging + manual review, NOT automated
+## moderation
+Phase 5's review pipeline has two stages: (1) a pHash near-duplicate check at
+publish time that flags re-uploads of the same image, and (2) a manual
+approve/reject queue. The pHash check catches exact/near-duplicate image
+files (same PNG, resized/recompressed copies, minor brightness edits). It
+does **not** catch: stylistic copies (different art of a similar character),
+likeness-of-real-person detection (needs a face-embedding model this project
+doesn't have), or proof of original authorship (an IP/DMCA problem). Calling
+this "automated moderation" would overclaim what it does; it's automated
+**flagging** + human **judgment**. The manual queue is where the real
+moderation happens.
+
+## 12. The consent gate cannot prevent republishing someone else's likeness
+The consent gate proves the publisher bound a character to a real face
+(liveness) and records the `bound_face_hash` as an audit trail. It does NOT
+prove the publisher created the character image. An attacker can install a
+marketplace character (which strips the binding), re-bind it to their own
+face (their own liveness), and republish — the new listing has a different
+`bound_face_hash` but the same image. pHash catches the duplicate image;
+the consent gate cannot. This is the honest boundary between identity-binding
+(what the consent gate does) and likeness-IP (what the review queue + takedown
+do). They're different problems with different tools.

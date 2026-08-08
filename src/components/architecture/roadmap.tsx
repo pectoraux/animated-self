@@ -67,10 +67,18 @@ const phases: Phase[] = [
   {
     num: "5",
     title: "Marketplace",
-    badge: "outline",
-    badgeTone: "border-amber-500/30 bg-amber-500/10 text-amber-200",
+    badge: "SHIPPED · engine + UI",
+    badgeTone: "border-emerald-500/30 bg-emerald-500/10 text-emerald-200",
     body:
-      "Discoverable stock + creator-published character packs (consent-bound). Distribution, licensing, and a lightweight review pipeline to reject non-consensual likeness uploads. Characters are just registry entries + signed consent artifacts; the inference stack is untouched.",
+      "Discoverable character packs behind a real publish / browse / install / review API. POST /api/marketplace/publish (consent-gated via the same _enforce_consent_gate as live, async render, and voice — the consent_token's face_hash must match the character's bound_face_hash) copies the character PNG + metadata into an immutable listing and records the publisher's bound_face_hash as an audit trail. GET /api/marketplace returns approved listings; GET /api/marketplace/pending returns the review queue. POST /api/marketplace/{id}/install creates a NEW unconsented character in the local registry — the publisher's binding does NOT transfer (the installer must run their own liveness to drive it). At publish time the engine computes a 64-bit DCT perceptual hash of the character PNG and compares it against every approved listing (Hamming distance ≤ 10 = near-duplicate); flagged listings stay pending for manual review, unflagged ones auto-approve. POST /api/marketplace/{id}/review is manual approve/reject — the judgment calls happen here, not in code. The inference stack is untouched — a marketplace character is just a registry entry + a copied PNG. 12 engine tests cover the consent gate (matching/wrong/no token), install stripping the binding, pHash identical/different/resize-robust/deterministic, duplicate-image flagging, manual review, install refused for non-approved, and a production-path test that runs the real pHash + real duplicate checker (not injected fakes). Total engine test count is now 90. The control panel surfaces this as a Marketplace card with Browse (approved grid + Install), Publish (consented-char picker + liveness + publisher ID + result panel that shows review_status and the honest flag_reason when flagged), and Moderator (pending queue + Approve/Reject) tabs.",
+    shipped: true,
+    callout: {
+      icon: "warning",
+      title:
+        "Honest limitation — pHash catches near-duplicate IMAGES only; manual review is where moderation happens",
+      body:
+        "The pHash near-duplicate check at publish time is automated flagging, NOT automated moderation. It catches the same PNG re-uploaded (resized, recompressed, minor brightness edits) because the DCT hash is robust to those transforms. It does NOT catch: stylistic copies (different art of a similar-looking character), likeness-of-real-person detection (that needs a face-embedding model this project doesn't have), or proof of original authorship (an IP/DMCA problem). The manual review queue is where the real moderation happens. Separately, the consent gate cannot prevent republishing someone else's likeness: an attacker can install a marketplace character (which strips the binding), re-bind it to their own face via their own liveness, and republish — the new listing has a different bound_face_hash but the same image. pHash catches the duplicate image; the consent gate cannot. This is the honest boundary between identity-binding (what the consent gate does) and likeness-IP (what the review queue + takedown do). See docs/reality-check.md #11 and #12.",
+    },
   },
 ];
 
