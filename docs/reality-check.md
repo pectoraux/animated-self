@@ -105,3 +105,26 @@ face (their own liveness), and republish — the new listing has a different
 the consent gate cannot. This is the honest boundary between identity-binding
 (what the consent gate does) and likeness-IP (what the review queue + takedown
 do). They're different problems with different tools.
+
+## 13. Persistence is asymmetric by design — know which is which
+Not everything in this engine survives a restart, and that's intentional:
+
+**Durable (file-based JSON):**
+- Stock characters (`engine/characters/manifest.json` + PNGs)
+- Generated/uploaded characters (`engine/characters/generated/manifest.json` + PNGs)
+- Marketplace listings (`engine/marketplace/listings.json` + images)
+
+**Ephemeral (in-process dicts, lost on restart):**
+- Live sessions (`_sessions`) — a session is a live WS connection; restarting
+  the engine means re-starting the session anyway.
+- Render jobs (`_render_jobs`) — a render is a background subprocess; if the
+  engine dies mid-render, the job is lost. Re-queue.
+- Voice outputs (`_voice_outputs`) — converted WAV files live on disk but the
+  download URL → path mapping is in-process. Restart = old URLs 404.
+
+This is a deliberate v1 trade: the durable stores are things a creator
+*publishes* (characters, listings) and would be angry to lose; the ephemeral
+stores are things tied to a running process (sessions, in-flight jobs). If
+the engine needs to survive restarts for jobs/voice outputs later, that's
+the moment to move those dicts to Prisma — the `ConsentRecord` model in
+`prisma/schema.prisma` already exists for exactly this kind of upgrade.

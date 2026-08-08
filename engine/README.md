@@ -90,8 +90,10 @@ engine/
 
 - **Runnable as-is:** landmark→pose mapping, live pipeline, virtual-cam sink,
   character registry (stock + generated), FastAPI surface, the full
-  session/render/consent lifecycle, the render job queue. All covered by
-  `pytest tests/` (61 tests) without any GPU or external model.
+  session/render/consent lifecycle, the render job queue, voice conversion
+  pipeline, marketplace (publish/browse/install/review). All covered by
+  `pytest tests/` (run it for the current count) without any GPU or external
+  model.
 - **Requires external assets to actually run inference:**
   - THA3 model weights — `backends/tha_poser.py` loads from `THA3_CHECKPOINT`.
     Code is real; weights are not redistributable here.

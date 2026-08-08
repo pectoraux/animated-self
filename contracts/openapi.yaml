@@ -72,7 +72,65 @@ paths:
   /api/consent/liveness/verify:
     post:
       summary: Verify detected challenge steps; issue consent_token bound to face hash
+      requestBody:
+        required: true
+        content:
+          application/json: { schema: { $ref: "#/components/schemas/LivenessVerifyRequest" } }
       responses: { "200": { description: result, content: { application/json: { schema: { $ref: "#/components/schemas/LivenessResult" } } } } }
+
+  /api/characters/providers:
+    get:
+      summary: Phase 2 — list character-generation providers (BYOK + demo)
+      responses:
+        "200": { description: list, content: { application/json: { schema: { type: array, items: { $ref: "#/components/schemas/GenProviderInfo" } } } } }
+
+  /api/characters/generate:
+    post:
+      summary: Phase 2 — text prompt to anime character (BYOK)
+      requestBody:
+        required: true
+        content:
+          application/json: { schema: { $ref: "#/components/schemas/GenerateCharacterRequest" } }
+      responses:
+        "200": { description: character, content: { application/json: { schema: { $ref: "#/components/schemas/Character" } } } }
+        "400": { description: unknown provider or BYOK key missing }
+        "502": { description: generation failed }
+
+  /api/characters/transfer:
+    post:
+      summary: Phase 2 — selfie to anime character (description-based, BYOK)
+      requestBody:
+        required: true
+        content:
+          application/json: { schema: { $ref: "#/components/schemas/TransferCharacterRequest" } }
+      responses:
+        "200": { description: character, content: { application/json: { schema: { $ref: "#/components/schemas/Character" } } } }
+        "400": { description: unknown provider or BYOK key missing }
+        "502": { description: transfer failed }
+
+  /api/characters/upload:
+    post:
+      summary: Phase 2 — raw PNG upload (starts consented=false)
+      requestBody:
+        required: true
+        content:
+          application/json: { schema: { $ref: "#/components/schemas/UploadCharacterRequest" } }
+      responses:
+        "200": { description: character, content: { application/json: { schema: { $ref: "#/components/schemas/Character" } } } }
+
+  /api/characters/{character_id}/consent/bind:
+    post:
+      summary: Phase 2 — bind a verified consent_token to a generated/uploaded character
+      parameters: [ { name: character_id, in: path, required: true, schema: { type: string } } ]
+      requestBody:
+        required: true
+        content:
+          application/json: { schema: { $ref: "#/components/schemas/ConsentBindRequest" } }
+      responses:
+        "200": { description: bound character, content: { application/json: { schema: { $ref: "#/components/schemas/Character" } } } }
+        "403": { description: invalid consent token }
+        "404": { description: character not found }
+        "409": { description: already consent-bound to a different face }
 
   /api/render:
     post:
@@ -267,8 +325,58 @@ components:
       properties:
         challenge_id: { type: string }
         passed: { type: boolean }
-        consent_token: { type: string }
+        consent_token: { type: string, nullable: true, description: "HMAC-signed token; null when passed=false. Mirrors models.py: consent_token: str | None = None" }
         reason: { type: string, nullable: true }
+    LivenessVerifyRequest:
+      type: object
+      description: |
+        Client payload to /api/consent/liveness/verify. detected_steps is the
+        ordered list of challenge steps the client detected; landmark_evidence
+        is the captured face evidence (deterministically hashed into the
+        consent token).
+      properties:
+        challenge_id: { type: string }
+        detected_steps: { type: array, items: { type: string } }
+        landmark_evidence:
+          oneOf:
+            - type: object
+            - type: array
+    GenProviderInfo:
+      type: object
+      description: Phase 2 — provider metadata for the character-gen selector.
+      properties:
+        id: { type: string }
+        byok: { type: boolean }
+        requires_key: { type: boolean }
+        label: { type: string }
+    GenerateCharacterRequest:
+      type: object
+      description: Phase 2 — text prompt to anime character (BYOK).
+      properties:
+        prompt: { type: string }
+        name: { type: string }
+        provider: { type: string, default: demo }
+        api_key: { type: string, nullable: true }
+    TransferCharacterRequest:
+      type: object
+      description: Phase 2 — selfie to anime character (description-based, BYOK).
+      properties:
+        selfie_b64: { type: string }
+        name: { type: string }
+        provider: { type: string, default: demo }
+        api_key: { type: string, nullable: true }
+    UploadCharacterRequest:
+      type: object
+      description: Phase 2 — raw PNG upload (starts consented=false).
+      properties:
+        name: { type: string }
+        image_b64: { type: string }
+    ConsentBindRequest:
+      type: object
+      description: Phase 2 — bind a verified consent_token to a generated/uploaded character.
+      properties:
+        character_id: { type: string }
+        consent_token: { type: string }
     VoiceConvertRequest:
       type: object
       description: |

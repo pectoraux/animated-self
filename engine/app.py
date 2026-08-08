@@ -101,9 +101,13 @@ _render_jobs: dict[str, RenderJob] = {}
 
 
 def _capabilities() -> dict[str, bool]:
-    import torch
+    try:
+        import torch
+        cuda = torch.cuda.is_available()
+    except ImportError:
+        cuda = False
     return {
-        "cuda": torch.cuda.is_available(),
+        "cuda": cuda,
         "model_loaded": poser.loaded,
         "virtual_cam": True,  # best-effort; sink.start() will raise if unavailable
     }
@@ -157,13 +161,29 @@ def character_thumbnail(character_id: str) -> Response:
 # Phase 2 — character generation (BYOK)
 # ---------------------------------------------------------------------------
 def _decode_b64(s: str) -> bytes:
-    """Accept raw base64 or a data URI (data:image/png;base64,...)."""
+    """Accept raw base64 or a data URI (data:image/png;base64,...).
+
+    Enforces a 25MB cap on the decoded payload — cheap insurance against
+    accidental huge uploads on a local-first single-operator tool. Not a
+    security boundary; a real deployment behind a reverse proxy should also
+    cap request size at the proxy level.
+    """
+    MAX_PAYLOAD_BYTES = 25 * 1024 * 1024  # 25 MB
+    if len(s) > MAX_PAYLOAD_BYTES * 2:  # base64 is ~4/3 the size, allow headroom
+        raise HTTPException(
+            413, f"payload too large (>{MAX_PAYLOAD_BYTES // (1024*1024)}MB decoded cap)"
+        )
     if "," in s and s.startswith("data:"):
         s = s.split(",", 1)[1]
     try:
-        return base64.b64decode(s)
+        decoded = base64.b64decode(s)
     except Exception as e:
-        raise HTTPException(400, f"invalid base64 image: {e}")
+        raise HTTPException(400, f"invalid base64 payload: {e}")
+    if len(decoded) > MAX_PAYLOAD_BYTES:
+        raise HTTPException(
+            413, f"decoded payload too large ({len(decoded)} > {MAX_PAYLOAD_BYTES} bytes)"
+        )
+    return decoded
 
 
 @app.get("/api/characters/providers", response_model=list[GenProviderInfo])

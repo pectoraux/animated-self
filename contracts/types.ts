@@ -113,7 +113,9 @@ export interface LivenessChallenge {
 export interface LivenessResult {
   challenge_id: string;
   passed: boolean;
-  consent_token: string;
+  /** HMAC-signed consent token (None when passed=false). Mirrors models.py:
+   * `consent_token: str | None = None`. */
+  consent_token?: string | null;
   reason?: string | null;
 }
 
