@@ -179,3 +179,75 @@ Stage Summary:
 - The 80e1088 audit's instruction #3 (test the non-injected production path for DI components) is now satisfied: 3 tests guard _resolve_poser's fallback branch, verified to catch the exact AttributeError regression.
 - 64 tests pass. Phase 3 is shipped end-to-end (engine + UI). The consent gate is consistently enforced across live + async paths.
 - Honest framing preserved: the diffusion model itself is bring-your-own (external command), same as THA3's weights. No open-source model reliably hits anime-style audio-driven lip-sync yet.
+
+---
+Task ID: verify-a8e4154 + p4-1
+Agent: lead (main)
+Task: Pull/review a8e4154 (stale DemoRenderer copy fix), scrub remaining stale refs, then build Phase 4 engine (voice conversion).
+
+Work Log:
+- Pulled a8e4154 (docs fix by payswapdotorg). Reviewed: removed fabricated DemoRenderer claim from roadmap.tsx (my stale copy from discarded parallel Phase 3 — the class never existed in shipped code), fixed /download → /file endpoint in studio-section.tsx. Fair criticism: I recovered the UI from my previous commit without scrubbing copy that described discarded code.
+- Applied the lesson: grepped for ALL stale references, not just the two the reviewer caught. Found 3 more in async-render.tsx: (1) "demo renderer produces a placeholder video" copy, (2) Video tab offering a feature the engine rejects with 400, (3) Draft/High quality selector with fabricated "Draft uses THA3" / "research-stage stub" descriptions. Fixed all three honestly. Committed as afcef44.
+- 64 tests pass, lint clean, Agent Browser verified fixed copy renders.
+- Built Phase 4 engine (p4-1):
+  * backends/voice_converter.py: VoiceConverter protocol + ExternalCommandConverter (VOICE_CONVERT_CMD, same pattern as DIFFUSION_RENDER_CMD — operator configures an RVC CLI, we define the contract) + CloudConverter (BYOK, e.g. ElevenLabs speech-to-speech via direct HTTPS, key never persisted). get_converter() returns None when unconfigured — NOT faked. No demo converter.
+  * app.py: POST /api/voice/convert (async file conversion, consent-gated via _enforce_consent_gate — same helper as live + render, no parallel check) + GET /api/voice/{id}/download. 503 when unconfigured, not silent bypass.
+  * models.py: VoiceConvertRequest + VoiceConvertResult.
+  * tests/test_voice_conversion.py: 13 tests — converter selection (None when unconfigured, external when cmd set), external command runs/fails/missing-output, consent gate (refuses locked char, refuses unrelated token, accepts matching token, stock no token), 503 unconfigured, download endpoint, production-path test (get_converter with real cp command, not a fake).
+  * docs/reality-check.md: 2 new honest limitations — #9 live voice needs virtual audio device (same driver problem as virtual cam), #10 RVC quality depends on the model you bring.
+- 77 tests pass (64 + 13). Lint clean.
+
+Stage Summary:
+- Phase 4 engine shipped honestly. Voice conversion follows the exact same pattern as diffusion: external command (operator configures), BYOK cloud (user key per-request), no bundled/fake model, clear 503 when unconfigured.
+- Consent gate reuses _enforce_consent_gate — zero new consent code. Converting audio to sound like someone's avatar is identity-affecting, so it goes through the same bound_face_hash check as live sessions and async renders.
+- Live voice path (/ws/voice) is scoped but not wired — honestly documented in reality-check.md #9 (needs virtual audio device for OBS, same driver problem as virtual cam). Async path is real and tested.
+- 77 tests pass. Next: Phase 4 UI (voice settings panel).
+
+---
+Task ID: p4-2
+Agent: lead (Phase 4 UI)
+Task: Build the Phase 4 voice conversion UI — a Studio panel mounted below Async Render, an additive update to contracts/types.ts, and an honest update to the roadmap card. Engine is shipped; this is the frontend.
+
+Work Log:
+- Read worklog, docs/reality-check.md, engine/backends/voice_converter.py, engine/app.py (/api/voice/convert + /api/voice/{out_id}/download + _enforce_consent_gate), engine/models.py (VoiceConvertRequest/Result), engine/tests/test_voice_conversion.py. Read async-render.tsx + liveness-dialog.tsx + character-store.ts to mirror the existing dark-studio aesthetic and the shared consent flow.
+- Verified every engine claim before writing UI copy:
+  * get_converter() priority cmd > cloud > none (voice_converter.py:215-219).
+  * ExternalCommandConverter.convert ignores api_key (signature comment, line 91).
+  * CloudConverter.convert raises ValueError if api_key missing → app.py:492-493 catches → HTTP 400.
+  * app.py:466-471 returns 503 with "Voice conversion not configured" when both env vars unset.
+  * _enforce_consent_gate is the SAME function used by start_session and create_render (app.py:447-449).
+  * test_voice_convert_refuses_unrelated_token asserts 403 "does not match" (face_hash check).
+  * Live /ws/voice is mentioned only in a comment (app.py:460), not wired. reality-check.md #9 spells out the VB-Cable / BlackHole / pulseaudio null sink requirement.
+  * Counted tests with pytest --collect-only: 77 total (13 in test_voice_conversion.py). Matches the previous agent's claim and the task description.
+- Additive types (contracts/types.ts): added VoiceConvertRequest, VoiceConvertResult, voiceConvertUrl(), voiceDownloadUrl(outId). Mirrors engine/models.py exactly. Doc-comment notes the engine raises HTTPException (503/403/502/400) rather than returning ok=false in the body, so callers must read the HTTP status — the panel does.
+- Built src/components/studio/voice-panel.tsx (Client Component, 'use client'). Mirrors async-render.tsx structure: Card with rose-accent header + EngineBadge, two-column lg grid (controls left, result right). Reuses the shared Zustand store for characters + engineConnected + the shared LivenessDialog for bound-char re-consent. Same CharacterPickerButton / CharacterThumb pattern as async-render (locked chars disabled, stock + consented custom chars selectable). Audio file drop reads as base64 (strips data URI prefix) and POSTs to voiceConvertUrl().
+- Flow:
+  * Demo mode (engineConnected=false): amber alert "Engine not connected — voice conversion requires VOICE_CONVERT_CMD or VOICE_CLOUD_PROVIDER to be set on the engine. In demo mode, clicking Convert simulates a successful conversion." Convert button simulates a successful conversion after ~2s with a "Simulated" badge. Download button is disabled with note: "In demo mode no real file is produced. Run the Python engine with VOICE_CONVERT_CMD set to convert actual audio."
+  * Live mode: shows a neutral info card explaining cmd > cloud > none selection priority and that the panel can't tell which is active without trying the request. Always shows an optional BYOK API key field (the engine validates per-request — ignored by ExternalCommandConverter, required by CloudConverter). Convert POSTs {character_id, audio_b64, consent_token?, api_key?}. Surfaces HTTP status honestly:
+      - 200 → "Download WAV" link via voiceDownloadUrl(outId)
+      - 503 → "Voice conversion not configured on the engine" + remediation hint
+      - 403 → "Consent gate refused the request" + re-run-liveness hint
+      - 502 → "The converter returned an error" + stderr hint
+      - 400 → "Cloud converter needs an API key"
+- Consent: bound custom char (source=generated/uploaded, consented=true) shows "Re-run liveness to convert" CTA → opens shared LivenessDialog → captures consent_token via onBound → enables Convert. Stock chars convert immediately. The consent_token's face_hash is checked by _enforce_consent_gate, so the same token from liveness works for /api/voice/convert.
+- Cleanup: clearTimeout(demoTimerRef) on unmount and on every Convert click. consentToken + result state reset when the user picks a different character (the token is face-specific). Result state resets when the audio file changes.
+- Mounted VoicePanel in studio-section.tsx below AsyncRender (CreateCharacter → StudioPanel → AsyncRender → VoicePanel). Updated the section note to mention /api/voice/convert + /api/voice/{out_id}/download and that both consent-gated via the shared liveness dialog.
+- Updated roadmap.tsx Phase 4 card: badge from "outline" → "SHIPPED · engine + UI", shipped=true, body describes async voice conversion, two real backends (external command + BYOK cloud), consent gate, 13 voice tests, 77 total. Added honest-limitation callout matching Phase 2/3 pattern: VOICE_CONVERT_CMD unset by default → 503 until operator configures; no model bundled (same reason as THA3 weights / DIFFUSION_RENDER_CMD); live /ws/voice defined but not wired in v1 (needs virtual audio device for OBS, same driver problem as virtual cam).
+- Bonus honesty pass on the architecture docs: added the two voice endpoints to api-contracts.tsx endpoint table, and added the voice paths + VoiceConvertRequest/Result schemas to contracts/openapi.yaml (the 503/403/502/400 responses are spelled out).
+- Lint: bun run lint exit 0 (after removing one unused Upload import from lucide-react).
+- Dev server: tail of /home/z/my-project/dev.log shows clean compiles ("✓ Compiled in …") and GET / 200 responses. No errors. /api/health?XTransformPort=3031 returns 404 (expected — Python engine not running in this sandbox; the panel correctly falls into demo mode).
+- Claim audit (the lesson from a8e4154 — don't ship copy you haven't verified): walked through every technical claim in voice-panel.tsx + roadmap.tsx Phase 4 entry against engine code. 32+ specific claims verified, including:
+  * "Selection priority is cmd > cloud > none" → voice_converter.py:get_converter lines 215-219
+  * "ExternalCommandConverter runs VOICE_CONVERT_CMD (an RVC CLI or anything honoring the audio-in, audio-out contract — no model is bundled or verified)" → voice_converter.py:7-13 docstring + reality-check.md #10
+  * "CloudConverter does BYOK HTTPS (ElevenLabs speech-to-speech today, api_key per-request, never persisted)" → voice_converter.py:117-127 docstring + _convert_elevenlabs uses urllib.request.urlopen on /v1/speech-to-speech/{voice_id}
+  * "converting audio to sound like someone's avatar is identity-affecting" → literal quote from app.py:449
+  * "the /ws/voice contract is defined but the live audio path needs a virtual audio device (VB-Cable / BlackHole / pulseaudio null sink)" → app.py:460 comment + reality-check.md #9 (exact match on the three drivers)
+  * "in-process store; durable storage is Phase 5" → app.py:_voice_outputs dict + comment "Phase 5 moves this to durable storage"
+  * "13 engine tests … total engine test count is now 77" → pytest --collect-only = 77 total, 13 in test_voice_conversion.py
+  The panel never calls the converter a "demo" or "stub" — it's a real external-command/BYOK converter. The only "Simulated" badges describe the client-side demo mode when the engine isn't connected, exactly as async-render.tsx does.
+
+Stage Summary:
+- Phase 4 UI shipped. The voice conversion panel matches the existing dark-studio aesthetic, reuses the shared Zustand store + LivenessDialog, handles engine-not-connected demo mode honestly, and surfaces every engine error case (503/403/502/400) with a specific remediation hint.
+- Every technical claim in the new UI copy was verified against engine/app.py, engine/backends/voice_converter.py, engine/models.py, engine/tests/test_voice_conversion.py, and docs/reality-check.md before the file was written. The panel deliberately does NOT claim live voice conversion works (the /ws/voice contract is defined but unwired in v1), and does NOT claim a specific RVC model is bundled.
+- Lint clean, dev server clean. Route / only — no new routes added.
+- Phase 4 is now end-to-end shipped (engine + UI). Phase 5 (marketplace + durable voice output storage) is the next phase.

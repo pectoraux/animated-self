@@ -63,8 +63,11 @@ from models import (
     StartSessionResponse,
     TransferCharacterRequest,
     UploadCharacterRequest,
+    VoiceConvertRequest,
+    VoiceConvertResult,
 )
 from backends import poser, get_provider, list_providers
+from backends.voice_converter import get_converter
 from characters import (
     AlreadyConsentedError,
     list_characters,
@@ -432,6 +435,78 @@ def download_render(job_id: str) -> FileResponse:
     if not out_path.exists():
         raise HTTPException(404, "render file missing on disk")
     return FileResponse(str(out_path), media_type="video/mp4", filename=f"{job_id}.mp4")
+
+
+# ---------------------------------------------------------------------------
+# Phase 4 — voice conversion
+# ---------------------------------------------------------------------------
+# Optional RVC-style mic→avatar-voice stage. If no converter is configured
+# (VOICE_CONVERT_CMD / VOICE_CLOUD_PROVIDER unset), the endpoints return a
+# clear 503 — voice conversion is simply unavailable, not faked.
+#
+# Consent: voice conversion tied to a character goes through the SAME
+# _enforce_consent_gate as live sessions and async renders — no parallel
+# check. Converting audio to sound like someone's avatar is identity-affecting.
+
+# In-process store for converted audio files (downloadable for the process
+# lifetime). Phase 5 moves this to durable storage.
+_voice_outputs: dict[str, Path] = {}
+
+
+@app.post("/api/voice/convert", response_model=VoiceConvertResult)
+def voice_convert(req: VoiceConvertRequest) -> VoiceConvertResult:
+    """Convert an audio file to the avatar's voice.
+
+    Async (file in, file out). For the live path, see /ws/voice — but live
+    voice conversion needs a virtual audio device (VB-Cable/BlackHole) for
+    OBS, same as the virtual camera needs a driver. That's documented in
+    docs/reality-check.md.
+    """
+    converter = get_converter()
+    if converter is None:
+        raise HTTPException(
+            503,
+            "Voice conversion not configured. Set VOICE_CONVERT_CMD "
+            "(external command) or VOICE_CLOUD_PROVIDER (BYOK cloud).",
+        )
+
+    char = get_character(req.character_id)
+    if char is None:
+        raise HTTPException(404, "character not found")
+    # Same gate as live sessions and async renders.
+    _enforce_consent_gate(req.character_id, char, req.consent_token)
+
+    audio_bytes = _decode_b64(req.audio_b64)
+
+    import tempfile
+    with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp_in:
+        tmp_in.write(audio_bytes)
+        in_path = Path(tmp_in.name)
+
+    out_id = secrets.token_urlsafe(8)
+    out_path = Path(cfg.render_output_dir) / f"voice-{out_id}.wav"
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+
+    try:
+        converter.convert(in_path, out_path, None, api_key=req.api_key)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    except Exception as e:  # noqa: BLE001
+        log.warning("voice conversion failed: %s", e)
+        raise HTTPException(502, f"conversion failed: {e}")
+    finally:
+        in_path.unlink(missing_ok=True)
+
+    _voice_outputs[out_id] = out_path
+    return VoiceConvertResult(ok=True, download_url=f"/api/voice/{out_id}/download")
+
+
+@app.get("/api/voice/{out_id}/download")
+def voice_download(out_id: str) -> FileResponse:
+    p = _voice_outputs.get(out_id)
+    if p is None or not p.exists():
+        raise HTTPException(404, "voice output not found")
+    return FileResponse(str(p), media_type="audio/wav", filename=f"voice-{out_id}.wav")
 
 
 # ---------------------------------------------------------------------------

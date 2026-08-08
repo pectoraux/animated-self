@@ -28,6 +28,8 @@ const endpoints: {
   { method: "POST", path: "/api/consent/liveness/verify", purpose: "verify + issue consent_token" },
   { method: "POST", path: "/api/render", purpose: "queue async render (Phase 3)" },
   { method: "GET", path: "/api/render/{job_id}", purpose: "poll job" },
+  { method: "POST", path: "/api/voice/convert", purpose: "convert audio → avatar voice (Phase 4, consent-gated, 503 if unconfigured)" },
+  { method: "GET", path: "/api/voice/{out_id}/download", purpose: "download converted WAV (Phase 4)" },
 ];
 
 const methodColor: Record<string, string> = {

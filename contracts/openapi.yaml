@@ -88,6 +88,33 @@ paths:
       parameters: [ { name: job_id, in: path, required: true, schema: { type: string } } ]
       responses: { "200": { description: job, content: { application/json: { schema: { $ref: "#/components/schemas/RenderJob" } } } } }
 
+  /api/voice/convert:
+    post:
+      summary: |
+        Phase 4 — async voice conversion (file in, file out). Consent-gated
+        for bound custom characters via the same _enforce_consent_gate as
+        live sessions and async renders. Returns 503 when neither
+        VOICE_CONVERT_CMD nor VOICE_CLOUD_PROVIDER is set — voice conversion
+        is genuinely unavailable, not faked.
+      requestBody:
+        required: true
+        content:
+          application/json: { schema: { $ref: "#/components/schemas/VoiceConvertRequest" } }
+      responses:
+        "200": { description: result, content: { application/json: { schema: { $ref: "#/components/schemas/VoiceConvertResult" } } } }
+        "400": { description: cloud converter requires an api_key }
+        "403": { description: consent gate refused (locked char or token face_hash mismatch) }
+        "502": { description: converter raised (non-zero exit, missing output, cloud API error) }
+        "503": { description: voice conversion not configured (both env vars unset) }
+
+  /api/voice/{out_id}/download:
+    get:
+      summary: Download the converted WAV (valid for the engine process's lifetime)
+      parameters: [ { name: out_id, in: path, required: true, schema: { type: string } } ]
+      responses:
+        "200": { description: wav, content: { audio/wav: { schema: { type: string, format: binary } } } }
+        "404": { description: out_id unknown or process restarted }
+
 components:
   schemas:
     Character:
@@ -167,3 +194,27 @@ components:
         passed: { type: boolean }
         consent_token: { type: string }
         reason: { type: string, nullable: true }
+    VoiceConvertRequest:
+      type: object
+      description: |
+        Phase 4 — convert audio to the avatar's voice. Async (file in, file
+        out). audio_b64 is raw base64 or a data URI; the engine writes it to
+        a temp file and runs the configured converter. consent_token is
+        required for bound custom characters (same gate as live + async
+        render). api_key is required for cloud conversion (BYOK — never
+        persisted); ignored by the external-command converter.
+      properties:
+        character_id: { type: string }
+        audio_b64: { type: string }
+        consent_token: { type: string, nullable: true }
+        api_key: { type: string, nullable: true }
+    VoiceConvertResult:
+      type: object
+      description: |
+        On ok=true, download_url points at GET /api/voice/{out_id}/download
+        (valid for the engine process's lifetime). On failure the engine
+        raises HTTPException (503/403/502/400) rather than returning ok=false.
+      properties:
+        ok: { type: boolean }
+        download_url: { type: string, nullable: true }
+        error: { type: string, nullable: true }

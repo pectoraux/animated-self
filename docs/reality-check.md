@@ -64,3 +64,20 @@ LLM/image-gen calls are user-supplied keys. The app never bills or rate-limits
 them. This means generation latency/quality vary per user and the app can't
 SLA the experience. This is an explicit trade for the "never holds model usage"
 constraint.
+
+## 9. Live voice conversion needs a virtual audio device — same driver-install
+## problem as the virtual camera
+Phase 4 ships async voice conversion (`POST /api/voice/convert`) — file in,
+file out, no driver needed. The **live** voice path (mic → convert → OBS)
+requires a virtual audio device (VB-Cable on Windows, BlackHole on macOS,
+`pulseaudio` null sink on Linux) for OBS to pick up the converted audio.
+This is the same class of driver-install requirement as the virtual camera
+(`pyvirtualcam`), not a software problem we can solve away. The `/ws/voice`
+contract is defined but the live audio path is not wired in v1 — async is.
+
+## 10. RVC voice quality depends on the model you bring
+The engine runs whatever `VOICE_CONVERT_CMD` you configure. We don't bundle
+or verify a specific RVC model. Quality varies wildly between RVC forks and
+voice models — some sound robotic, some are indistinguishable. The engine
+provides the pipeline (convert, consent-gate, download); the model is
+bring-your-own, same as THA3 weights and DIFFUSION_RENDER_CMD.

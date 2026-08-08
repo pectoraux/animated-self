@@ -238,3 +238,30 @@ class LivenessResult(BaseModel):
     # a valid token at session start.
     consent_token: str | None = None
     reason: str | None = None
+
+
+# ---------------------------------------------------------------------------
+# Phase 4 — voice conversion
+# ---------------------------------------------------------------------------
+
+class VoiceConvertRequest(BaseModel):
+    """Convert an audio file to the avatar's voice. Async (file in, file out).
+
+    Consent-gated: if character_id refers to a bound (custom) character, a
+    valid consent_token is required — converting audio to sound like someone's
+    avatar is identity-affecting, same as driving their face.
+    """
+    character_id: str
+    # base64-encoded audio (data URI or raw base64)
+    audio_b64: str
+    consent_token: str | None = None
+    # BYOK: required when the converter is a cloud provider (ElevenLabs etc).
+    # Never persisted by the engine.
+    api_key: str | None = None
+
+
+class VoiceConvertResult(BaseModel):
+    ok: bool
+    # URL to fetch the converted audio (valid for the process lifetime).
+    download_url: str | None = None
+    error: str | None = None

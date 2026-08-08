@@ -51,10 +51,18 @@ const phases: Phase[] = [
   {
     num: "4",
     title: "Voice conversion",
-    badge: "outline",
-    badgeTone: "border-rose-500/30 bg-rose-500/10 text-rose-200",
+    badge: "SHIPPED · engine + UI",
+    badgeTone: "border-emerald-500/30 bg-emerald-500/10 text-emerald-200",
     body:
-      "Optional audio pipeline: creator's mic → RVC-style voice converter → avatar's voice. Inserted between capture and OBS audio output. BYOK for cloud voice models; local RVC for low latency. Live mode adds ~20–40ms.",
+      "Async voice conversion (file in, file out) behind POST /api/voice/convert — the creator's mic audio is base64-encoded, the engine runs the configured converter on a temp file, and the converted WAV is served from GET /api/voice/{out_id}/download (in-process store; durable storage is Phase 5). The consent gate applies for bound custom characters via the same _enforce_consent_gate as live sessions and async renders — converting audio to sound like someone's avatar is identity-affecting. Two real backends, same pattern as the diffusion renderer: ExternalCommandConverter runs VOICE_CONVERT_CMD (an RVC CLI or anything honoring the audio-in, audio-out contract — no model is bundled or verified), and CloudConverter does BYOK HTTPS (ElevenLabs speech-to-speech today, api_key per-request, never persisted). Selection priority is cmd > cloud > none. If neither env var is set, /api/voice/convert returns 503 — voice conversion is genuinely unavailable, not faked. 13 engine tests cover selection, the subprocess contract, the consent gate (locked / unrelated-token / matching-token / stock), the 503 unconfigured case, and the download endpoint; total engine test count is now 77. The control panel surfaces this as a Voice Conversion card with character picker, audio upload, optional BYOK API key field, and a result panel that distinguishes live-success (Download WAV), demo-simulated (disabled button + honest note), and the 503/403/502/400 error cases.",
+    shipped: true,
+    callout: {
+      icon: "warning",
+      title:
+        "Honest limitation — live /ws/voice is not wired; no model is bundled",
+      body:
+        "The async path (POST /api/voice/convert) is real and tested end to end with a stand-in command. What it drives is not: VOICE_CONVERT_CMD is unset by default, so /api/voice/convert returns 503 until you point it at a real RVC setup you've configured yourself — we don't bundle or verify a specific model, for the same reason THA3's weights and DIFFUSION_RENDER_CMD aren't bundled (see docs/reality-check.md). The live voice path (/ws/voice) is defined as a contract but not wired in v1 — live voice needs a virtual audio device (VB-Cable on Windows, BlackHole on macOS, pulseaudio null sink on Linux) for OBS to pick up the converted stream, the same class of driver-install requirement as the virtual camera. Async is the v1 path; live voice is a future phase.",
+    },
   },
   {
     num: "5",

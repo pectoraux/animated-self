@@ -177,6 +177,64 @@ export function renderDownloadUrl(jobId: string): string {
   return engineUrl(`/api/render/${encodeURIComponent(jobId)}/file`);
 }
 
+// --- Phase 4 — voice conversion (async, file-in file-out) ----------------
+
+/**
+ * Phase 4 — convert a creator's mic audio to the avatar's voice.
+ *
+ * Async: file in (base64-encoded), file out (WAV download_url). The
+ * consent gate applies for bound custom characters exactly like the live and
+ * async render paths — converting audio to sound like someone's avatar is
+ * identity-affecting.
+ *
+ * Mirrors engine/models.py:VoiceConvertRequest.
+ */
+export interface VoiceConvertRequest {
+  character_id: string;
+  /** Base64-encoded audio (raw base64 or data URI). */
+  audio_b64: string;
+  /** Required for bound custom characters; ignored for stock. */
+  consent_token?: string | null;
+  /**
+   * BYOK cloud API key. Required when the engine's converter is a cloud
+   * provider (VOICE_CLOUD_PROVIDER set, e.g. ElevenLabs); ignored by the
+   * external-command converter (VOICE_CONVERT_CMD). Never persisted by the
+   * engine.
+   */
+  api_key?: string | null;
+}
+
+/**
+ * Phase 4 — result of /api/voice/convert.
+ *
+ * On ok=true, download_url points at GET /api/voice/{out_id}/download
+ * (a WAV file, valid for the engine process's lifetime). On ok=false, error
+ * carries the reason. Note the engine raises HTTPException (503 unconfigured,
+ * 403 consent fail, 502 conversion fail) rather than returning ok=false in
+ * the body — callers must read the HTTP status.
+ *
+ * Mirrors engine/models.py:VoiceConvertResult.
+ */
+export interface VoiceConvertResult {
+  ok: boolean;
+  download_url?: string | null;
+  error?: string | null;
+}
+
+/** Phase 4 — POST target for /api/voice/convert. */
+export function voiceConvertUrl(): string {
+  return engineUrl("/api/voice/convert");
+}
+
+/**
+ * Phase 4 — download URL for a converted WAV. The engine returns
+ * `/api/voice/{out_id}/download` in the convert response; this wraps it
+ * through the gateway with the engine port query.
+ */
+export function voiceDownloadUrl(outId: string): string {
+  return engineUrl(`/api/voice/${encodeURIComponent(outId)}/download`);
+}
+
 /** Build the WebSocket URL the control panel uses for the live pose stream. */
 export function engineWsUrl(sessionId: string): string {
   // Relative path + query; the gateway rewrites to the engine port.
