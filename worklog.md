@@ -83,3 +83,23 @@ Stage Summary:
 - Browser-verified end-to-end: the / route renders cleanly and the core interaction (Studio panel start/stop streaming with simulated readouts) works. The architecture document is fully rendered and navigable.
 - No fixes were needed — the subagent's build was correct on first pass.
 - Deliverables complete: system architecture, repo structure, Phase 1 MVP scaffolded engine (runnable Python), API contracts, phased roadmap, reality-check flags — all presented in the web app and backed by real repo files.
+
+---
+Task ID: review-fixes
+Agent: lead (main)
+Task: Address the 4 findings from the external code review (consent gate unwired, WS heartbeat exception, template cruft, missing tests).
+
+Work Log:
+- Finding 1 (consent gate — load-bearing): created engine/consent.py with a real gate: challenges issued+stored (120s TTL)+single-use; verify_challenge checks the EXACT steps for that challenge_id (not any bank); consent_token is HMAC-signed and derived from face evidence (sha256 of landmarks), not random; validate_consent_token checks signature+expiry+replay. Wired start_session to call it for non-consented chars (consent_token="x" no longer passes). Added LivenessVerifyRequest model + CONSENT_SECRET config.
+- Finding 2 (WS heartbeat): rewrote ws_live to run recv_poses as primary task and cancel heartbeat on exit (create_task + finally cancel + contextlib.suppress); wrapped heartbeat send in try/except (WebSocketDisconnect, RuntimeError). No more stray RuntimeError up to 15s after disconnect.
+- Finding 3 (cruft): package.json name -> animated-self; prisma schema User/Post -> User + ConsentRecord (ties DB to the gate); removed examples/websocket/ and download/; untracked db/custom.db. KEPT Caddyfile/.zscripts/mini-services/root tests (sandbox runtime infra, not cruft — removing breaks the env). Also untracked skills/ (Z.ai toolkit, not part of project) after fixing a gitignore newline bug (/skills/ had merged with db/custom.db into one non-matching line).
+- Finding 4 (tests): refactored LivePipeline for DI (poser+sink injected) so staleness/FPS logic is testable without CUDA. Wrote engine/tests/ — 32 tests: euler round-trips, pose_vector_to_tha3 clamping/sign conventions, consent single-use/expiry/signature/replay/evidence-binding, LivePipeline staleness/stats/budget-warning. All pass in 0.62s.
+- Tests caught 2 real issues on first run (wrong rotation-matrix convention in the euler test fixture, and a backwards gaze assertion) — both were test-fixture bugs, not production bugs; confirmed pose.py's mapping is correct. Fixed fixtures, all green.
+- Updated UI consent section copy to reflect the gate is now actually wired (issued/stored/single-use, token derived from evidence, start_session validates).
+- Lint clean; dev server healthy; Agent Browser verified: page renders, no errors, consent section shows new copy, Studio start/stop toggle works, demo mode activates, mobile + footer OK.
+- Pushed to github.com/pectoraux/animated-self (commit a46af0a).
+
+Stage Summary:
+- All 4 findings fixed. The consent gate is the important one: it's now a real enforced gate (issued→stored→verified→signed→validated→burned) rather than a no-op. Phase 2 can build custom-character generation on it.
+- 32 passing tests cover the nontrivial math + the gate mechanics + the staleness logic.
+- Pushed to GitHub (public repo).
