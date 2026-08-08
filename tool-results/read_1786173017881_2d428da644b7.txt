@@ -1,0 +1,1621 @@
+     1→"use client";
+     2→
+     3→import * as React from "react";
+     4→import { motion, AnimatePresence } from "framer-motion";
+     5→import {
+     6→  Camera,
+     7→  CheckCircle2,
+     8→  CircleAlert,
+     9→  Info,
+    10→  KeyRound,
+    11→  Loader2,
+    12→  Lock,
+    13→  LockOpen,
+    14→  ScanFace,
+    15→  Sparkles,
+    16→  Upload,
+    17→  Wand2,
+    18→  XCircle,
+    19→} from "lucide-react";
+    20→
+    21→import { Button } from "@/components/ui/button";
+    22→import { Badge } from "@/components/ui/badge";
+    23→import {
+    24→  Card,
+    25→  CardContent,
+    26→  CardDescription,
+    27→  CardHeader,
+    28→  CardTitle,
+    29→} from "@/components/ui/card";
+    30→import { Input } from "@/components/ui/input";
+    31→import { Label } from "@/components/ui/label";
+    32→import { Textarea } from "@/components/ui/textarea";
+    33→import { Separator } from "@/components/ui/separator";
+    34→import { Progress } from "@/components/ui/progress";
+    35→import {
+    36→  Select,
+    37→  SelectContent,
+    38→  SelectItem,
+    39→  SelectTrigger,
+    40→  SelectValue,
+    41→} from "@/components/ui/select";
+    42→import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+    43→import {
+    44→  Dialog,
+    45→  DialogContent,
+    46→  DialogDescription,
+    47→  DialogFooter,
+    48→  DialogHeader,
+    49→  DialogTitle,
+    50→} from "@/components/ui/dialog";
+    51→import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
+    52→import { cn } from "@/lib/utils";
+    53→import { useCharacterStore, type UiCharacter } from "@/lib/character-store";
+    54→import { engineUrl, ENGINE_PORT } from "@contracts/types";
+    55→import type {
+    56→  GenProviderInfo,
+    57→  GenerateCharacterRequest,
+    58→  TransferCharacterRequest,
+    59→  UploadCharacterRequest,
+    60→  LivenessChallenge,
+    61→  LivenessResult,
+    62→} from "@contracts/types";
+    63→
+    64→const HEALTH_TIMEOUT_MS = 1500;
+    65→const GEN_TIMEOUT_MS = 30_000;
+    66→
+    67→type EngineProbe =
+    68→  | { status: "probing" }
+    69→  | { status: "demo" }
+    70→  | { status: "live" };
+    71→
+    72→/**
+    73→ * Phase 2 — Create Character panel.
+    74→ *
+    75→ * Three creation routes (Text → Character, Selfie → Character, Upload), a
+    76→ * provider dropdown that reflects /api/characters/providers, conditional API
+    77→ * key entry for BYOK providers, and a liveness → bind dialog that flips a
+    78→ * freshly-created character from consented=false to consented=true.
+    79→ *
+    80→ * When the Python engine isn't reachable (the typical sandbox state), the
+    81→ * panel runs an honest demo path: simulated generation after ~2s, simulated
+    82→ * liveness after ~1.5s, with a visible "Simulated" badge — exactly like the
+    83→ * existing Studio panel.
+    84→ */
+    85→export function CreateCharacter() {
+    86→  const engine = useEngineProbe();
+    87→  const { providers } = useProviders(engine.status === "live");
+    88→  const [createdIds, setCreatedIds] = React.useState<string[]>([]);
+    89→  const [activeLivenessId, setActiveLivenessId] = React.useState<string | null>(
+    90→    null,
+    91→  );
+    92→
+    93→  const characters = useCharacterStore((s) => s.characters);
+    94→  const addCreated = useCharacterStore((s) => s.addCreated);
+    95→  const setConsented = useCharacterStore((s) => s.setConsented);
+    96→  const setEngineConnected = useCharacterStore((s) => s.setEngineConnected);
+    97→
+    98→  // Mirror probe state into the shared store so the Studio picker agrees.
+    99→  React.useEffect(() => {
+   100→    setEngineConnected(engine.status === "live");
+   101→  }, [engine.status, setEngineConnected]);
+   102→
+   103→  const created = createdIds
+   104→    .map((id) => characters.find((c) => c.id === id))
+   105→    .filter((c): c is UiCharacter => Boolean(c));
+   106→
+   107→  const onCreated = React.useCallback((id: string) => {
+   108→    setCreatedIds((prev) => [...prev, id]);
+   109→  }, []);
+   110→
+   111→  const onConsented = React.useCallback(
+   112→    (id: string) => {
+   113→      setConsented(id);
+   114→      setActiveLivenessId(null);
+   115→    },
+   116→    [setConsented],
+   117→  );
+   118→
+   119→  const isDemo = engine.status !== "live";
+   120→
+   121→  return (
+   122→    <Card className="overflow-hidden border-neutral-800 bg-neutral-900/60">
+   123→      <CardHeader className="border-b border-neutral-800">
+   124→        <div className="flex flex-wrap items-center justify-between gap-3">
+   125→          <div>
+   126→            <CardTitle className="flex items-center gap-2 text-neutral-50">
+   127→              <Wand2 className="size-5 text-rose-300" />
+   128→              Create a character
+   129→            </CardTitle>
+   130→            <CardDescription className="text-neutral-400">
+   131→              Phase 2 — text, selfie, or upload. Generated characters start
+   132→              locked; complete liveness to drive them.
+   133→            </CardDescription>
+   134→          </div>
+   135→          <CreateEngineBadge engine={engine} />
+   136→        </div>
+   137→      </CardHeader>
+   138→
+   139→      <CardContent className="space-y-6 p-6">
+   140→        <Tabs defaultValue="text" className="gap-4">
+   141→          <TabsList className="bg-neutral-950/60">
+   142→            <TabsTrigger
+   143→              value="text"
+   144→              className="data-[state=active]:bg-rose-500/15 data-[state=active]:text-rose-200"
+   145→            >
+   146→              <Sparkles className="size-3.5" />
+   147→              Text → Character
+   148→            </TabsTrigger>
+   149→            <TabsTrigger
+   150→              value="selfie"
+   151→              className="data-[state=active]:bg-rose-500/15 data-[state=active]:text-rose-200"
+   152→            >
+   153→              <Camera className="size-3.5" />
+   154→              Selfie → Character
+   155→            </TabsTrigger>
+   156→            <TabsTrigger
+   157→              value="upload"
+   158→              className="data-[state=active]:bg-rose-500/15 data-[state=active]:text-rose-200"
+   159→            >
+   160→              <Upload className="size-3.5" />
+   161→              Upload
+   162→            </TabsTrigger>
+   163→          </TabsList>
+   164→
+   165→          <TabsContent value="text">
+   166→            <TextTab
+   167→              isDemo={isDemo}
+   168→              providers={providers}
+   169→              onCreated={onCreated}
+   170→            />
+   171→          </TabsContent>
+   172→
+   173→          <TabsContent value="selfie">
+   174→            <SelfieTab
+   175→              isDemo={isDemo}
+   176→              providers={providers}
+   177→              onCreated={onCreated}
+   178→            />
+   179→          </TabsContent>
+   180→
+   181→          <TabsContent value="upload">
+   182→            <UploadTab isDemo={isDemo} onCreated={onCreated} />
+   183→          </TabsContent>
+   184→        </Tabs>
+   185→
+   186→        <Separator className="bg-neutral-800" />
+   187→
+   188→        {/* Recently created characters */}
+   189→        <div>
+   190→          <div className="mb-3 flex items-center justify-between">
+   191→            <h3 className="text-xs font-semibold uppercase tracking-wider text-neutral-400">
+   192→              Your characters
+   193→            </h3>
+   194→            <span className="font-mono text-[11px] text-neutral-500">
+   195→              {created.length} created
+   196→            </span>
+   197→          </div>
+   198→          {created.length === 0 ? (
+   199→            <div className="rounded-lg border border-dashed border-neutral-800 bg-neutral-950/30 p-6 text-center">
+   200→              <Sparkles className="mx-auto size-5 text-neutral-600" />
+   201→              <p className="mt-2 text-sm text-neutral-500">
+   202→                Nothing here yet. Generate a character above — it&rsquo;ll show
+   203→                up locked, ready for liveness.
+   204→              </p>
+   205→            </div>
+   206→          ) : (
+   207→            <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+   208→              {created.map((c) => (
+   209→                <CreatedCharacterCard
+   210→                  key={c.id}
+   211→                  character={c}
+   212→                  isDemo={isDemo}
+   213→                  onUnlock={() => setActiveLivenessId(c.id)}
+   214→                />
+   215→              ))}
+   216→            </div>
+   217→          )}
+   218→        </div>
+   219→      </CardContent>
+   220→
+   221→      {/* Liveness → bind flow */}
+   222→      <LivenessDialog
+   223→        characterId={activeLivenessId}
+   224→        isDemo={isDemo}
+   225→        onClose={() => setActiveLivenessId(null)}
+   226→        onBound={onConsented}
+   227→      />
+   228→    </Card>
+   229→  );
+   230→}
+   231→
+   232→// ---------------------------------------------------------------------------
+   233→// Engine probe (shared with Studio via the store)
+   234→// ---------------------------------------------------------------------------
+   235→
+   236→function useEngineProbe(): EngineProbe {
+   237→  const [state, setState] = React.useState<EngineProbe>({ status: "probing" });
+   238→
+   239→  React.useEffect(() => {
+   240→    let cancelled = false;
+   241→    const ctrl = new AbortController();
+   242→    const timer = setTimeout(() => ctrl.abort(), HEALTH_TIMEOUT_MS);
+   243→
+   244→    fetch(`/api/health?XTransformPort=${ENGINE_PORT}`, {
+   245→      signal: ctrl.signal,
+   246→    })
+   247→      .then((r) =>
+   248→        r.ok ? r.json() : Promise.reject(new Error(String(r.status))),
+   249→      )
+   250→      .then(() => {
+   251→        if (!cancelled) setState({ status: "live" });
+   252→      })
+   253→      .catch(() => {
+   254→        if (!cancelled) setState({ status: "demo" });
+   255→      })
+   256→      .finally(() => clearTimeout(timer));
+   257→
+   258→    return () => {
+   259→      cancelled = true;
+   260→      ctrl.abort();
+   261→    };
+   262→  }, []);
+   263→
+   264→  return state;
+   265→}
+   266→
+   267→function CreateEngineBadge({ engine }: { engine: EngineProbe }) {
+   268→  if (engine.status === "probing") {
+   269→    return (
+   270→      <Badge
+   271→        variant="outline"
+   272→        className="gap-1.5 border-neutral-700 bg-neutral-900 text-neutral-300"
+   273→      >
+   274→        <Loader2 className="size-3.5 animate-spin" />
+   275→        Probing engine…
+   276→      </Badge>
+   277→    );
+   278→  }
+   279→  if (engine.status === "live") {
+   280→    return (
+   281→      <Badge
+   282→        variant="outline"
+   283→        className="gap-1.5 border-emerald-500/30 bg-emerald-500/10 text-emerald-300"
+   284→      >
+   285→        <CheckCircle2 className="size-3.5" />
+   286→        Engine connected · live generation
+   287→      </Badge>
+   288→    );
+   289→  }
+   290→  return (
+   291→    <Badge
+   292→      variant="outline"
+   293→      className="gap-1.5 border-amber-500/30 bg-amber-500/10 text-amber-300"
+   294→    >
+   295→      <CircleAlert className="size-3.5" />
+   296→      Demo mode — simulated generation
+   297→    </Badge>
+   298→  );
+   299→}
+   300→
+   301→// ---------------------------------------------------------------------------
+   302→// Provider dropdown (fetched from /api/characters/providers)
+   303→// ---------------------------------------------------------------------------
+   304→
+   305→function useProviders(live: boolean) {
+   306→  const [providers, setProviders] = React.useState<GenProviderInfo[]>([
+   307→    { id: "demo", byok: false, requires_key: false, label: "Demo (no key)" },
+   308→  ]);
+   309→
+   310→  React.useEffect(() => {
+   311→    if (!live) {
+   312→      setProviders([
+   313→        {
+   314→          id: "demo",
+   315→          byok: false,
+   316→          requires_key: false,
+   317→          label: "Demo (no key) — simulated",
+   318→        },
+   319→        {
+   320→          id: "openai",
+   321→          byok: true,
+   322→          requires_key: true,
+   323→          label: "OpenAI DALL·E 3 (BYOK)",
+   324→        },
+   325→      ]);
+   326→      return;
+   327→    }
+   328→    let cancelled = false;
+   329→    fetch(engineUrl("/api/characters/providers"))
+   330→      .then((r) => (r.ok ? r.json() : Promise.reject(new Error(String(r.status)))))
+   331→      .then((list: GenProviderInfo[]) => {
+   332→        if (cancelled || !Array.isArray(list) || list.length === 0) return;
+   333→        setProviders(list);
+   334→      })
+   335→      .catch(() => {
+   336→        if (cancelled) return;
+   337→        // Fall back to the static list if the engine hiccups.
+   338→        setProviders([
+   339→          {
+   340→            id: "demo",
+   341→            byok: false,
+   342→            requires_key: false,
+   343→            label: "Demo (no key)",
+   344→          },
+   345→        ]);
+   346→      });
+   347→    return () => {
+   348→      cancelled = true;
+   349→    };
+   350→  }, [live]);
+   351→
+   352→  return { providers };
+   353→}
+   354→
+   355→function ProviderSelect({
+   356→  value,
+   357→  onValueChange,
+   358→  providers,
+   359→}: {
+   360→  value: string;
+   361→  onValueChange: (v: string) => void;
+   362→  providers: GenProviderInfo[];
+   363→}) {
+   364→  return (
+   365→    <Select value={value} onValueChange={onValueChange}>
+   366→      <SelectTrigger className="w-full bg-neutral-950/40">
+   367→        <SelectValue placeholder="Pick a provider" />
+   368→      </SelectTrigger>
+   369→      <SelectContent className="border-neutral-800 bg-neutral-900">
+   370→        {providers.map((p) => (
+   371→          <SelectItem key={p.id} value={p.id}>
+   372→            <span className="flex items-center gap-2">
+   373→              {p.label}
+   374→              {p.byok ? (
+   375→                <Badge
+   376→                  variant="outline"
+   377→                  className="border-rose-500/30 bg-rose-500/10 text-[9px] text-rose-200"
+   378→                >
+   379→                  BYOK
+   380→                </Badge>
+   381→              ) : null}
+   382→            </span>
+   383→          </SelectItem>
+   384→        ))}
+   385→      </SelectContent>
+   386→    </Select>
+   387→  );
+   388→}
+   389→
+   390→function ApiKeyField({
+   391→  value,
+   392→  onChange,
+   393→  providerLabel,
+   394→}: {
+   395→  value: string;
+   396→  onChange: (v: string) => void;
+   397→  providerLabel: string;
+   398→}) {
+   399→  return (
+   400→    <div className="space-y-2">
+   401→      <Label
+   402→        htmlFor="api-key"
+   403→        className="text-neutral-300"
+   404→      >
+   405→        <KeyRound className="size-3.5 text-rose-300" />
+   406→        {providerLabel} API key
+   407→      </Label>
+   408→      <Input
+   409→        id="api-key"
+   410→        type="password"
+   411→        autoComplete="off"
+   412→        placeholder="sk-…"
+   413→        value={value}
+   414→        onChange={(e) => onChange(e.target.value)}
+   415→        className="bg-neutral-950/40 font-mono text-sm"
+   416→      />
+   417→      <p className="text-[11px] leading-relaxed text-neutral-500">
+   418→        Sent per-request only. The engine never logs or persists the key — it
+   419→        calls the provider with your key and discards it.
+   420→      </p>
+   421→    </div>
+   422→  );
+   423→}
+   424→
+   425→// ---------------------------------------------------------------------------
+   426→// Tab: Text → Character
+   427→// ---------------------------------------------------------------------------
+   428→
+   429→interface TabProps {
+   430→  isDemo: boolean;
+   431→  providers: GenProviderInfo[];
+   432→  onCreated: (id: string) => void;
+   433→}
+   434→
+   435→function TextTab({ isDemo, providers, onCreated }: TabProps) {
+   436→  const [name, setName] = React.useState("");
+   437→  const [prompt, setPrompt] = React.useState(
+   438→    "Anime girl with rose-pink hair, soft pastel palette, head-and-shoulders portrait, neutral expression, plain background",
+   439→  );
+   440→  const [providerId, setProviderId] = React.useState(
+   441→    providers[0]?.id ?? "demo",
+   442→  );
+   443→  const [apiKey, setApiKey] = React.useState("");
+   444→  const [busy, setBusy] = React.useState(false);
+   445→  const [error, setError] = React.useState<string | null>(null);
+   446→  const addCreated = useCharacterStore((s) => s.addCreated);
+   447→
+   448→  const provider = providers.find((p) => p.id === providerId);
+   449→  const needsKey = provider?.requires_key === true;
+   450→
+   451→  React.useEffect(() => {
+   452→    // If the provider list loads after first render, ensure selectedId exists.
+   453→    if (!providers.some((p) => p.id === providerId)) {
+   454→      setProviderId(providers[0]?.id ?? "demo");
+   455→    }
+   456→  }, [providers, providerId]);
+   457→
+   458→  const canSubmit =
+   459→    !busy && name.trim().length > 0 && prompt.trim().length > 0 && (!needsKey || apiKey.trim().length > 0);
+   460→
+   461→  const onSubmit = async () => {
+   462→    setError(null);
+   463→    setBusy(true);
+   464→    try {
+   465→      if (!isDemo) {
+   466→        const body: GenerateCharacterRequest = {
+   467→          prompt: prompt.trim(),
+   468→          name: name.trim(),
+   469→          provider: providerId,
+   470→          api_key: needsKey ? apiKey.trim() : null,
+   471→        };
+   472→        const ctrl = new AbortController();
+   473→        const timer = setTimeout(() => ctrl.abort(), GEN_TIMEOUT_MS);
+   474→        try {
+   475→          const res = await fetch(engineUrl("/api/characters/generate"), {
+   476→            method: "POST",
+   477→            headers: { "Content-Type": "application/json" },
+   478→            body: JSON.stringify(body),
+   479→            signal: ctrl.signal,
+   480→          });
+   481→          if (!res.ok) {
+   482→            const txt = await res.text().catch(() => "");
+   483→            throw new Error(
+   484→              `Engine returned ${res.status}${txt ? `: ${txt.slice(0, 200)}` : ""}`,
+   485→            );
+   486→          }
+   487→          // Engine returns the new Character — but we don't strictly need its
+   488→          // response: the next /api/characters poll would surface it. To keep
+   489→          // the UX immediate we use addCreated with the local name + a tag.
+   490→          const id = addCreated({
+   491→            name: name.trim(),
+   492→            source: "generated",
+   493→            simulated: false,
+   494→            tags: ["from-prompt"],
+   495→          });
+   496→          onCreated(id);
+   497→        } finally {
+   498→          clearTimeout(timer);
+   499→        }
+   500→      } else {
+   501→        // Demo path: simulate ~2s of generation.
+   502→        await sleep(2000);
+   503→        const id = addCreated({
+   504→          name: name.trim(),
+   505→          source: "generated",
+   506→          simulated: true,
+   507→          tags: ["from-prompt"],
+   508→        });
+   509→        onCreated(id);
+   510→      }
+   511→    } catch (e) {
+   512→      setError(e instanceof Error ? e.message : String(e));
+   513→    } finally {
+   514→      setBusy(false);
+   515→    }
+   516→  };
+   517→
+   518→  return (
+   519→    <div className="grid gap-4">
+   520→      <div className="grid gap-2">
+   521→        <Label htmlFor="text-name" className="text-neutral-300">
+   522→          Character name
+   523→        </Label>
+   524→        <Input
+   525→          id="text-name"
+   526→          placeholder="e.g. Hana"
+   527→          value={name}
+   528→          onChange={(e) => setName(e.target.value)}
+   529→          className="bg-neutral-950/40"
+   530→        />
+   531→      </div>
+   532→
+   533→      <div className="grid gap-2">
+   534→        <Label htmlFor="text-prompt" className="text-neutral-300">
+   535→          Prompt
+   536→        </Label>
+   537→        <Textarea
+   538→          id="text-prompt"
+   539→          rows={4}
+   540→          value={prompt}
+   541→          onChange={(e) => setPrompt(e.target.value)}
+   542→          className="bg-neutral-950/40 font-mono text-sm"
+   543→          placeholder="Describe the character: hair, palette, expression, framing…"
+   544→        />
+   545→        <p className="text-[11px] text-neutral-500">
+   546→          The engine forwards this verbatim to the provider&rsquo;s image model.
+   547→        </p>
+   548→      </div>
+   549→
+   550→      <div className="grid gap-4 sm:grid-cols-2">
+   551→        <div className="grid gap-2">
+   552→          <Label className="text-neutral-300">Provider</Label>
+   553→          <ProviderSelect
+   554→            value={providerId}
+   555→            onValueChange={setProviderId}
+   556→            providers={providers}
+   557→          />
+   558→        </div>
+   559→        {needsKey ? (
+   560→          <ApiKeyField
+   561→            value={apiKey}
+   562→            onChange={setApiKey}
+   563→            providerLabel={provider?.label ?? "Provider"}
+   564→          />
+   565→        ) : null}
+   566→      </div>
+   567→
+   568→      <SubmitRow
+   569→        busy={busy}
+   570→        disabled={!canSubmit}
+   571→        onSubmit={onSubmit}
+   572→        isDemo={isDemo}
+   573→        actionLabel="Generate character"
+   574→        icon={<Sparkles className="size-4" />}
+   575→      />
+   576→
+   577→      {error ? (
+   578→        <Alert className="border-amber-500/40 bg-amber-500/10 text-amber-200">
+   579→          <CircleAlert className="size-4" />
+   580→          <AlertTitle>Generation failed</AlertTitle>
+   581→          <AlertDescription className="text-amber-100/80">
+   582→            {error}
+   583→          </AlertDescription>
+   584→        </Alert>
+   585→      ) : null}
+   586→    </div>
+   587→  );
+   588→}
+   589→
+   590→// ---------------------------------------------------------------------------
+   591→// Tab: Selfie → Character
+   592→// ---------------------------------------------------------------------------
+   593→
+   594→function SelfieTab({ isDemo, providers, onCreated }: TabProps) {
+   595→  const [name, setName] = React.useState("");
+   596→  const [file, setFile] = React.useState<File | null>(null);
+   597→  const [previewUrl, setPreviewUrl] = React.useState<string | null>(null);
+   598→  const [providerId, setProviderId] = React.useState(
+   599→    providers[0]?.id ?? "demo",
+   600→  );
+   601→  const [apiKey, setApiKey] = React.useState("");
+   602→  const [busy, setBusy] = React.useState(false);
+   603→  const [error, setError] = React.useState<string | null>(null);
+   604→  const addCreated = useCharacterStore((s) => s.addCreated);
+   605→
+   606→  const provider = providers.find((p) => p.id === providerId);
+   607→  const needsKey = provider?.requires_key === true;
+   608→
+   609→  React.useEffect(() => {
+   610→    if (!providers.some((p) => p.id === providerId)) {
+   611→      setProviderId(providers[0]?.id ?? "demo");
+   612→    }
+   613→  }, [providers, providerId]);
+   614→
+   615→  React.useEffect(() => {
+   616→    if (!file) {
+   617→      setPreviewUrl(null);
+   618→      return;
+   619→    }
+   620→    const url = URL.createObjectURL(file);
+   621→    setPreviewUrl(url);
+   622→    return () => URL.revokeObjectURL(url);
+   623→  }, [file]);
+   624→
+   625→  const canSubmit =
+   626→    !busy &&
+   627→    name.trim().length > 0 &&
+   628→    file !== null &&
+   629→    (!needsKey || apiKey.trim().length > 0);
+   630→
+   631→  const onSubmit = async () => {
+   632→    if (!file) return;
+   633→    setError(null);
+   634→    setBusy(true);
+   635→    try {
+   636→      const selfieB64 = await fileToDataUrl(file);
+   637→      if (!isDemo) {
+   638→        const body: TransferCharacterRequest = {
+   639→          selfie_b64: selfieB64,
+   640→          name: name.trim(),
+   641→          provider: providerId,
+   642→          api_key: needsKey ? apiKey.trim() : null,
+   643→        };
+   644→        const ctrl = new AbortController();
+   645→        const timer = setTimeout(() => ctrl.abort(), GEN_TIMEOUT_MS);
+   646→        try {
+   647→          const res = await fetch(engineUrl("/api/characters/transfer"), {
+   648→            method: "POST",
+   649→            headers: { "Content-Type": "application/json" },
+   650→            body: JSON.stringify(body),
+   651→            signal: ctrl.signal,
+   652→          });
+   653→          if (!res.ok) {
+   654→            const txt = await res.text().catch(() => "");
+   655→            throw new Error(
+   656→              `Engine returned ${res.status}${txt ? `: ${txt.slice(0, 200)}` : ""}`,
+   657→            );
+   658→          }
+   659→          const id = addCreated({
+   660→            name: name.trim(),
+   661→            source: "generated",
+   662→            simulated: false,
+   663→            tags: ["from-selfie"],
+   664→          });
+   665→          onCreated(id);
+   666→        } finally {
+   667→          clearTimeout(timer);
+   668→        }
+   669→      } else {
+   670→        await sleep(2000);
+   671→        const id = addCreated({
+   672→          name: name.trim(),
+   673→          source: "generated",
+   674→          simulated: true,
+   675→          tags: ["from-selfie"],
+   676→        });
+   677→        onCreated(id);
+   678→      }
+   679→    } catch (e) {
+   680→      setError(e instanceof Error ? e.message : String(e));
+   681→    } finally {
+   682→      setBusy(false);
+   683→    }
+   684→  };
+   685→
+   686→  return (
+   687→    <div className="grid gap-4">
+   688→      <Alert className="border-rose-500/30 bg-rose-500/[0.06] text-rose-100">
+   689→        <Info className="size-4 text-rose-300" />
+   690→        <AlertTitle className="text-rose-200">
+   691→          Description-based, not pixel-level
+   692→        </AlertTitle>
+   693→        <AlertDescription className="text-neutral-300">
+   694→          The engine describes your selfie via a VLM, then generates an anime
+   695→          character matching the description. It is NOT identity-preserving
+   696→          img2img — that lands in Phase 3+.
+   697→        </AlertDescription>
+   698→      </Alert>
+   699→
+   700→      <div className="grid gap-2">
+   701→        <Label htmlFor="selfie-name" className="text-neutral-300">
+   702→          Character name
+   703→        </Label>
+   704→        <Input
+   705→          id="selfie-name"
+   706→          placeholder="e.g. Self-portrait"
+   707→          value={name}
+   708→          onChange={(e) => setName(e.target.value)}
+   709→          className="bg-neutral-950/40"
+   710→        />
+   711→      </div>
+   712→
+   713→      <FileDrop
+   714→        accept="image/*"
+   715→        file={file}
+   716→        previewUrl={previewUrl}
+   717→        onPick={setFile}
+   718→        label="Drop a selfie (JPG/PNG) or click to choose"
+   719→        hint="The VLM uses this only to produce a text description — the image itself is not sent to the image model."
+   720→      />
+   721→
+   722→      <div className="grid gap-4 sm:grid-cols-2">
+   723→        <div className="grid gap-2">
+   724→          <Label className="text-neutral-300">Provider</Label>
+   725→          <ProviderSelect
+   726→            value={providerId}
+   727→            onValueChange={setProviderId}
+   728→            providers={providers}
+   729→          />
+   730→        </div>
+   731→        {needsKey ? (
+   732→          <ApiKeyField
+   733→            value={apiKey}
+   734→            onChange={setApiKey}
+   735→            providerLabel={provider?.label ?? "Provider"}
+   736→          />
+   737→        ) : null}
+   738→      </div>
+   739→
+   740→      <SubmitRow
+   741→        busy={busy}
+   742→        disabled={!canSubmit}
+   743→        onSubmit={onSubmit}
+   744→        isDemo={isDemo}
+   745→        actionLabel="Transfer to anime"
+   746→        icon={<Camera className="size-4" />}
+   747→      />
+   748→
+   749→      {error ? (
+   750→        <Alert className="border-amber-500/40 bg-amber-500/10 text-amber-200">
+   751→          <CircleAlert className="size-4" />
+   752→          <AlertTitle>Transfer failed</AlertTitle>
+   753→          <AlertDescription className="text-amber-100/80">
+   754→            {error}
+   755→          </AlertDescription>
+   756→        </Alert>
+   757→      ) : null}
+   758→    </div>
+   759→  );
+   760→}
+   761→
+   762→// ---------------------------------------------------------------------------
+   763→// Tab: Upload
+   764→// ---------------------------------------------------------------------------
+   765→
+   766→function UploadTab({ isDemo, onCreated }: TabProps) {
+   767→  const [name, setName] = React.useState("");
+   768→  const [file, setFile] = React.useState<File | null>(null);
+   769→  const [previewUrl, setPreviewUrl] = React.useState<string | null>(null);
+   770→  const [busy, setBusy] = React.useState(false);
+   771→  const [error, setError] = React.useState<string | null>(null);
+   772→  const addCreated = useCharacterStore((s) => s.addCreated);
+   773→
+   774→  React.useEffect(() => {
+   775→    if (!file) {
+   776→      setPreviewUrl(null);
+   777→      return;
+   778→    }
+   779→    const url = URL.createObjectURL(file);
+   780→    setPreviewUrl(url);
+   781→    return () => URL.revokeObjectURL(url);
+   782→  }, [file]);
+   783→
+   784→  const isPng = file?.type === "image/png";
+   785→  const canSubmit = !busy && name.trim().length > 0 && file !== null && isPng;
+   786→
+   787→  const onSubmit = async () => {
+   788→    if (!file || !isPng) return;
+   789→    setError(null);
+   790→    setBusy(true);
+   791→    try {
+   792→      const imageB64 = await fileToDataUrl(file);
+   793→      if (!isDemo) {
+   794→        const body: UploadCharacterRequest = {
+   795→          name: name.trim(),
+   796→          image_b64: imageB64,
+   797→        };
+   798→        const ctrl = new AbortController();
+   799→        const timer = setTimeout(() => ctrl.abort(), GEN_TIMEOUT_MS);
+   800→        try {
+   801→          const res = await fetch(engineUrl("/api/characters/upload"), {
+   802→            method: "POST",
+   803→            headers: { "Content-Type": "application/json" },
+   804→            body: JSON.stringify(body),
+   805→            signal: ctrl.signal,
+   806→          });
+   807→          if (!res.ok) {
+   808→            const txt = await res.text().catch(() => "");
+   809→            throw new Error(
+   810→              `Engine returned ${res.status}${txt ? `: ${txt.slice(0, 200)}` : ""}`,
+   811→            );
+   812→          }
+   813→          const id = addCreated({
+   814→            name: name.trim(),
+   815→            source: "uploaded",
+   816→            simulated: false,
+   817→            tags: ["uploaded-png"],
+   818→          });
+   819→          onCreated(id);
+   820→        } finally {
+   821→          clearTimeout(timer);
+   822→        }
+   823→      } else {
+   824→        await sleep(1500);
+   825→        const id = addCreated({
+   826→          name: name.trim(),
+   827→          source: "uploaded",
+   828→          simulated: true,
+   829→          tags: ["uploaded-png"],
+   830→        });
+   831→        onCreated(id);
+   832→      }
+   833→    } catch (e) {
+   834→      setError(e instanceof Error ? e.message : String(e));
+   835→    } finally {
+   836→      setBusy(false);
+   837→    }
+   838→  };
+   839→
+   840→  return (
+   841→    <div className="grid gap-4">
+   842→      <Alert className="border-amber-500/30 bg-amber-500/[0.06] text-amber-100">
+   843→        <Info className="size-4 text-amber-300" />
+   844→        <AlertTitle className="text-amber-200">
+   845→          Starts locked — complete liveness to drive it
+   846→        </AlertTitle>
+   847→        <AlertDescription className="text-neutral-300">
+   848→          For users who already have an anime character PNG. The file is treated
+   849→          as a custom character and goes through the same consent gate — the
+   850→          uploader must prove they can drive this face before anyone can stream
+   851→          it.
+   852→        </AlertDescription>
+   853→      </Alert>
+   854→
+   855→      <div className="grid gap-2">
+   856→        <Label htmlFor="upload-name" className="text-neutral-300">
+   857→          Character name
+   858→        </Label>
+   859→        <Input
+   860→          id="upload-name"
+   861→          placeholder="e.g. My OC"
+   862→          value={name}
+   863→          onChange={(e) => setName(e.target.value)}
+   864→          className="bg-neutral-950/40"
+   865→        />
+   866→      </div>
+   867→
+   868→      <FileDrop
+   869→        accept="image/png"
+   870→        file={file}
+   871→        previewUrl={previewUrl}
+   872→        onPick={setFile}
+   873→        label="Drop an anime PNG or click to choose"
+   874→        hint={
+   875→          file && !isPng
+   876→            ? "Only PNG is accepted for upload — re-export as PNG."
+   877→            : undefined
+   878→        }
+   879→        error={file !== null && !isPng}
+   880→      />
+   881→
+   882→      <SubmitRow
+   883→        busy={busy}
+   884→        disabled={!canSubmit}
+   885→        onSubmit={onSubmit}
+   886→        isDemo={isDemo}
+   887→        actionLabel="Upload character"
+   888→        icon={<Upload className="size-4" />}
+   889→      />
+   890→
+   891→      {error ? (
+   892→        <Alert className="border-amber-500/40 bg-amber-500/10 text-amber-200">
+   893→          <CircleAlert className="size-4" />
+   894→          <AlertTitle>Upload failed</AlertTitle>
+   895→          <AlertDescription className="text-amber-100/80">
+   896→            {error}
+   897→          </AlertDescription>
+   898→        </Alert>
+   899→      ) : null}
+   900→    </div>
+   901→  );
+   902→}
+   903→
+   904→// ---------------------------------------------------------------------------
+   905→// Created character card — shows lock state + CTA
+   906→// ---------------------------------------------------------------------------
+   907→
+   908→function CreatedCharacterCard({
+   909→  character,
+   910→  isDemo,
+   911→  onUnlock,
+   912→}: {
+   913→  character: UiCharacter;
+   914→  isDemo: boolean;
+   915→  onUnlock: () => void;
+   916→}) {
+   917→  const consented = character.consented;
+   918→  return (
+   919→    <motion.div
+   920→      layout
+   921→      initial={{ opacity: 0, y: 8 }}
+   922→      animate={{ opacity: 1, y: 0 }}
+   923→      exit={{ opacity: 0, y: -8 }}
+   924→      className={cn(
+   925→        "overflow-hidden rounded-lg border bg-neutral-950/40",
+   926→        consented
+   927→          ? "border-emerald-500/30"
+   928→          : "border-amber-500/30",
+   929→      )}
+   930→    >
+   931→      <div className="relative aspect-square">
+   932→        <div
+   933→          className="absolute inset-0"
+   934→          style={{ background: character.gradient, opacity: 0.6 }}
+   935→          aria-hidden
+   936→        />
+   937→        <div className="absolute inset-0 flex items-center justify-center">
+   938→          <span className="font-mono text-4xl font-bold text-white drop-shadow">
+   939→            {character.initial}
+   940→          </span>
+   941→        </div>
+   942→        <div className="absolute right-2 top-2">
+   943→          {consented ? (
+   944→            <Badge
+   945→              variant="outline"
+   946→              className="gap-1 border-emerald-500/40 bg-emerald-500/15 text-emerald-200"
+   947→            >
+   948→              <LockOpen className="size-3" />
+   949→              Unlocked
+   950→            </Badge>
+   951→          ) : (
+   952→            <Badge
+   953→              variant="outline"
+   954→              className="gap-1 border-amber-500/40 bg-amber-500/15 text-amber-200"
+   955→            >
+   956→              <Lock className="size-3" />
+   957→              Locked
+   958→            </Badge>
+   959→          )}
+   960→        </div>
+   961→        {character.simulated ? (
+   962→          <div className="absolute left-2 top-2">
+   963→            <Badge
+   964→              variant="outline"
+   965→              className="border-amber-500/40 bg-amber-500/15 text-[10px] text-amber-200"
+   966→            >
+   967→              Simulated
+   968→            </Badge>
+   969→          </div>
+   970→        ) : null}
+   971→      </div>
+   972→      <div className="space-y-2 p-3">
+   973→        <div className="flex items-center justify-between gap-2">
+   974→          <p className="truncate text-sm font-semibold text-neutral-100">
+   975→            {character.name}
+   976→          </p>
+   977→          <Badge
+   978→            variant="outline"
+   979→            className="border-neutral-700 bg-neutral-900 text-[10px] text-neutral-400"
+   980→          >
+   981→            {character.source === "generated" ? "generated" : "uploaded"}
+   982→          </Badge>
+   983→        </div>
+   984→        <p className="text-[11px] leading-relaxed text-neutral-500">
+   985→          {character.blurb}
+   986→        </p>
+   987→        {consented ? (
+   988→          <div className="flex items-center gap-1.5 text-[11px] text-emerald-300">
+   989→            <CheckCircle2 className="size-3.5" />
+   990→            Bound to your face — selectable in the picker.
+   991→          </div>
+   992→        ) : (
+   993→          <Button
+   994→            type="button"
+   995→            size="sm"
+   996→            onClick={onUnlock}
+   997→            className="w-full bg-rose-500 text-white hover:bg-rose-400"
+   998→          >
+   999→            <ScanFace className="size-3.5" />
+  1000→            Complete liveness to unlock
+  1001→          </Button>
+  1002→        )}
+  1003→        {isDemo && !consented ? (
+  1004→          <p className="text-[10px] leading-relaxed text-neutral-600">
+  1005→            Liveness is simulated in demo mode.
+  1006→          </p>
+  1007→        ) : null}
+  1008→      </div>
+  1009→    </motion.div>
+  1010→  );
+  1011→}
+  1012→
+  1013→// ---------------------------------------------------------------------------
+  1014→// Liveness → bind dialog
+  1015→// ---------------------------------------------------------------------------
+  1016→
+  1017→type LivenessPhase =
+  1018→  | { kind: "idle" }
+  1019→  | { kind: "requesting" }
+  1020→  | { kind: "challenge"; challenge: LivenessChallenge; cameraStarted: boolean; verifying: boolean; progress: number }
+  1021→  | { kind: "binding" }
+  1022→  | { kind: "done" }
+  1023→  | { kind: "error"; message: string };
+  1024→
+  1025→const DEMO_STEPS = ["look_left", "look_right", "smile"];
+  1026→
+  1027→function LivenessDialog({
+  1028→  characterId,
+  1029→  isDemo,
+  1030→  onClose,
+  1031→  onBound,
+  1032→}: {
+  1033→  characterId: string | null;
+  1034→  isDemo: boolean;
+  1035→  onClose: () => void;
+  1036→  onBound: (id: string) => void;
+  1037→}) {
+  1038→  const open = characterId !== null;
+  1039→  const [phase, setPhase] = React.useState<LivenessPhase>({ kind: "idle" });
+  1040→
+  1041→  // Reset when reopened for a different character.
+  1042→  React.useEffect(() => {
+  1043→    if (open) setPhase({ kind: "idle" });
+  1044→  }, [open, characterId]);
+  1045→
+  1046→  const characters = useCharacterStore((s) => s.characters);
+  1047→  const character = characters.find((c) => c.id === characterId);
+  1048→
+  1049→  // Auto-start the challenge request when the dialog opens.
+  1050→  React.useEffect(() => {
+  1051→    if (!open || !characterId || phase.kind !== "idle") return;
+  1052→    void requestChallenge(characterId, isDemo, setPhase);
+  1053→  }, [open, characterId, phase.kind, isDemo]);
+  1054→
+  1055→  // Drive the fake "verify" progress bar.
+  1056→  React.useEffect(() => {
+  1057→    if (phase.kind !== "challenge" || !phase.verifying) return;
+  1058→    const interval = setInterval(() => {
+  1059→      setPhase((p) => {
+  1060→        if (p.kind !== "challenge" || !p.verifying) return p;
+  1061→        const next = Math.min(100, p.progress + 12 + Math.random() * 8);
+  1062→        return { ...p, progress: next };
+  1063→      });
+  1064→    }, 220);
+  1065→    return () => clearInterval(interval);
+  1066→  }, [phase.kind, phase.verifying]);
+  1067→
+  1068→  const onStartCamera = () => {
+  1069→    setPhase((p) => (p.kind === "challenge" ? { ...p, cameraStarted: true } : p));
+  1070→  };
+  1071→
+  1072→  const onVerify = async () => {
+  1073→    if (!characterId) return;
+  1074→    const current = phase;
+  1075→    if (current.kind !== "challenge") return;
+  1076→    setPhase({ ...current, verifying: true, progress: 0 });
+  1077→    try {
+  1078→      const result = await verifyChallenge(
+  1079→        characterId,
+  1080→        current.challenge,
+  1081→        isDemo,
+  1082→      );
+  1083→      if (!result.passed) {
+  1084→        throw new Error(result.reason ?? "Liveness failed");
+  1085→      }
+  1086→      setPhase({ kind: "binding" });
+  1087→      await bindCharacter(characterId, result.consent_token, isDemo);
+  1088→      setPhase({ kind: "done" });
+  1089→      // Give the user a moment to see the success state, then close + flip.
+  1090→      setTimeout(() => {
+  1091→        onBound(characterId);
+  1092→      }, 900);
+  1093→    } catch (e) {
+  1094→      setPhase({
+  1095→        kind: "error",
+  1096→        message: e instanceof Error ? e.message : String(e),
+  1097→      });
+  1098→    }
+  1099→  };
+  1100→
+  1101→  return (
+  1102→    <Dialog
+  1103→      open={open}
+  1104→      onOpenChange={(o) => {
+  1105→        if (!o) onClose();
+  1106→      }}
+  1107→    >
+  1108→      <DialogContent className="border-neutral-800 bg-neutral-950 text-neutral-100 sm:max-w-lg">
+  1109→        <DialogHeader>
+  1110→          <DialogTitle className="flex items-center gap-2 text-neutral-50">
+  1111→            <ScanFace className="size-5 text-rose-300" />
+  1112→            Liveness — bind avatar to your face
+  1113→            {isDemo ? (
+  1114→              <Badge
+  1115→                variant="outline"
+  1116→                className="border-amber-500/40 bg-amber-500/15 text-[10px] text-amber-200"
+  1117→              >
+  1118→                Simulated
+  1119→              </Badge>
+  1120→            ) : null}
+  1121→          </DialogTitle>
+  1122→          <DialogDescription className="text-neutral-400">
+  1123→            This is the anti-deepfake gate. The avatar is bound to YOUR face so
+  1124→            only you can drive it — even someone with the PNG file can&rsquo;t
+  1125→            stream it without redoing this.
+  1126→          </DialogDescription>
+  1127→        </DialogHeader>
+  1128→
+  1129→        {!character ? (
+  1130→          <DialogFooter>
+  1131→            <Button variant="outline" onClick={onClose}>
+  1132→              Close
+  1133→            </Button>
+  1134→          </DialogFooter>
+  1135→        ) : (
+  1136→          <div className="space-y-4">
+  1137→            <div className="flex items-center gap-3 rounded-lg border border-neutral-800 bg-neutral-900/50 p-3">
+  1138→              <div
+  1139→                className="flex size-12 items-center justify-center rounded-full ring-1 ring-inset ring-black/30"
+  1140→                style={{ background: character.gradient }}
+  1141→                aria-hidden
+  1142→              >
+  1143→                <span className="font-mono text-lg font-bold text-white">
+  1144→                  {character.initial}
+  1145→                </span>
+  1146→              </div>
+  1147→              <div>
+  1148→                <p className="text-sm font-semibold text-neutral-100">
+  1149→                  {character.name}
+  1150→                </p>
+  1151→                <p className="text-[11px] text-neutral-500">
+  1152→                  {character.source === "uploaded"
+  1153→                    ? "Uploaded PNG"
+  1154→                    : "Generated character"}{" "}
+  1155→                  · currently locked
+  1156→                </p>
+  1157→              </div>
+  1158→            </div>
+  1159→
+  1160→            <AnimatePresence mode="wait">
+  1161→              {phase.kind === "idle" || phase.kind === "requesting" ? (
+  1162→                <motion.div
+  1163→                  key="requesting"
+  1164→                  initial={{ opacity: 0 }}
+  1165→                  animate={{ opacity: 1 }}
+  1166→                  exit={{ opacity: 0 }}
+  1167→                  className="flex items-center gap-2 text-sm text-neutral-400"
+  1168→                >
+  1169→                  <Loader2 className="size-4 animate-spin text-rose-300" />
+  1170→                  Requesting a randomized challenge…
+  1171→                </motion.div>
+  1172→              ) : null}
+  1173→
+  1174→              {phase.kind === "challenge" ? (
+  1175→                <motion.div
+  1176→                  key="challenge"
+  1177→                  initial={{ opacity: 0 }}
+  1178→                  animate={{ opacity: 1 }}
+  1179→                  exit={{ opacity: 0 }}
+  1180→                  className="space-y-4"
+  1181→                >
+  1182→                  <div>
+  1183→                    <p className="mb-2 text-xs font-semibold uppercase tracking-wider text-neutral-400">
+  1184→                      Perform these motions on camera
+  1185→                    </p>
+  1186→                    <ol className="space-y-1.5">
+  1187→                      {phase.challenge.steps.map((s, i) => (
+  1188→                        <li
+  1189→                          key={`${s}-${i}`}
+  1190→                          className="flex items-center gap-2 rounded-md border border-neutral-800 bg-neutral-900/40 px-3 py-2 text-sm text-neutral-200"
+  1191→                        >
+  1192→                          <span className="flex size-5 items-center justify-center rounded-full border border-rose-500/40 bg-rose-500/10 font-mono text-[10px] text-rose-200">
+  1193→                            {i + 1}
+  1194→                          </span>
+  1195→                          <span className="font-mono text-[13px]">{s}</span>
+  1196→                        </li>
+  1197→                      ))}
+  1198→                    </ol>
+  1199→                  </div>
+  1200→
+  1201→                  {/* Camera preview area */}
+  1202→                  <div className="relative aspect-video overflow-hidden rounded-lg border border-neutral-800 bg-neutral-950">
+  1203→                    {phase.cameraStarted ? (
+  1204→                      <div className="absolute inset-0 flex items-center justify-center">
+  1205→                        <motion.div
+  1206→                          animate={{
+  1207→                            opacity: [0.5, 1, 0.5],
+  1208→                          }}
+  1209→                          transition={{
+  1210→                            duration: 1.6,
+  1211→                            repeat: Infinity,
+  1212→                            ease: "easeInOut",
+  1213→                          }}
+  1214→                          className="flex flex-col items-center gap-2 text-neutral-400"
+  1215→                        >
+  1216→                          <Camera className="size-8 text-rose-300" />
+  1217→                          <p className="text-xs">
+  1218→                            {isDemo
+  1219→                              ? "Simulated camera — no real frames captured"
+  1220→                              : "Camera active — performing landmark detection"}
+  1221→                          </p>
+  1222→                        </motion.div>
+  1223→                      </div>
+  1224→                    ) : (
+  1225→                      <div className="absolute inset-0 flex flex-col items-center justify-center gap-2 text-neutral-500">
+  1226→                        <ScanFace className="size-8" />
+  1227→                        <p className="text-xs">Camera not started</p>
+  1228→                      </div>
+  1229→                    )}
+  1230→                    {isDemo ? (
+  1231→                      <div className="absolute right-2 top-2">
+  1232→                        <Badge
+  1233→                          variant="outline"
+  1234→                          className="border-amber-500/40 bg-amber-500/15 text-[10px] text-amber-200"
+  1235→                        >
+  1236→                          Simulated
+  1237→                        </Badge>
+  1238→                      </div>
+  1239→                    ) : null}
+  1240→                  </div>
+  1241→
+  1242→                  {phase.verifying ? (
+  1243→                    <div className="space-y-2">
+  1244→                      <Progress
+  1245→                        value={phase.progress}
+  1246→                        className="h-2 bg-neutral-800"
+  1247→                      />
+  1248→                      <p className="text-center text-[11px] text-neutral-400">
+  1249→                        Verifying detected motions against the issued
+  1250→                        challenge…
+  1251→                      </p>
+  1252→                    </div>
+  1253→                  ) : null}
+  1254→
+  1255→                  <div className="flex flex-col gap-2 sm:flex-row">
+  1256→                    <Button
+  1257→                      type="button"
+  1258→                      variant="outline"
+  1259→                      onClick={onStartCamera}
+  1260→                      disabled={phase.cameraStarted || phase.verifying}
+  1261→                      className="border-neutral-700 bg-neutral-900 text-neutral-200 hover:bg-neutral-800"
+  1262→                    >
+  1263→                      <Camera className="size-4" />
+  1264→                      {phase.cameraStarted ? "Camera ready" : "Start camera"}
+  1265→                    </Button>
+  1266→                    <Button
+  1267→                      type="button"
+  1268→                      onClick={onVerify}
+  1269→                      disabled={!phase.cameraStarted || phase.verifying}
+  1270→                      className="flex-1 bg-rose-500 text-white hover:bg-rose-400"
+  1271→                    >
+  1272→                      {phase.verifying ? (
+  1273→                        <Loader2 className="size-4 animate-spin" />
+  1274→                      ) : (
+  1275→                        <CheckCircle2 className="size-4" />
+  1276→                      )}
+  1277→                      I&rsquo;ve done the motions — Verify
+  1278→                    </Button>
+  1279→                  </div>
+  1280→                </motion.div>
+  1281→              ) : null}
+  1282→
+  1283→              {phase.kind === "binding" ? (
+  1284→                <motion.div
+  1285→                  key="binding"
+  1286→                  initial={{ opacity: 0 }}
+  1287→                  animate={{ opacity: 1 }}
+  1288→                  exit={{ opacity: 0 }}
+  1289→                  className="flex items-center gap-2 text-sm text-neutral-300"
+  1290→                >
+  1291→                  <Loader2 className="size-4 animate-spin text-rose-300" />
+  1292→                  Binding consent token to character…
+  1293→                </motion.div>
+  1294→              ) : null}
+  1295→
+  1296→              {phase.kind === "done" ? (
+  1297→                <motion.div
+  1298→                  key="done"
+  1299→                  initial={{ opacity: 0 }}
+  1300→                  animate={{ opacity: 1 }}
+  1301→                  exit={{ opacity: 0 }}
+  1302→                  className="flex items-start gap-3 rounded-lg border border-emerald-500/30 bg-emerald-500/10 p-4 text-emerald-100"
+  1303→                >
+  1304→                  <CheckCircle2 className="mt-0.5 size-5 text-emerald-300" />
+  1305→                  <div>
+  1306→                    <p className="text-sm font-semibold text-emerald-200">
+  1307→                      Bound — avatar unlocked
+  1308→                    </p>
+  1309→                    <p className="mt-1 text-sm text-neutral-300">
+  1310→                      The consent token is HMAC-signed and derived from your
+  1311→                      face evidence. {character.name} is now selectable in the
+  1312→                      picker.
+  1313→                    </p>
+  1314→                  </div>
+  1315→                </motion.div>
+  1316→              ) : null}
+  1317→
+  1318→              {phase.kind === "error" ? (
+  1319→                <motion.div
+  1320→                  key="error"
+  1321→                  initial={{ opacity: 0 }}
+  1322→                  animate={{ opacity: 1 }}
+  1323→                  exit={{ opacity: 0 }}
+  1324→                >
+  1325→                  <Alert className="border-amber-500/40 bg-amber-500/10 text-amber-200">
+  1326→                    <XCircle className="size-4" />
+  1327→                    <AlertTitle>Liveness failed</AlertTitle>
+  1328→                    <AlertDescription className="text-amber-100/80">
+  1329→                      {phase.message}
+  1330→                    </AlertDescription>
+  1331→                  </Alert>
+  1332→                </motion.div>
+  1333→              ) : null}
+  1334→            </AnimatePresence>
+  1335→
+  1336→            <Separator className="bg-neutral-800" />
+  1337→            <p className="text-[11px] leading-relaxed text-neutral-500">
+  1338→              <span className="font-semibold text-neutral-300">
+  1339→                What this actually verifies:
+  1340→              </span>{" "}
+  1341→              (a) liveness via the random challenge, (b) binding between the
+  1342→              avatar and a real face. It does NOT defeat a determined adversary
+  1343→              who deepfakes a real-time selfie back at the check — paired with
+  1344→              abuse reporting in Phase 5.
+  1345→            </p>
+  1346→          </div>
+  1347→        )}
+  1348→
+  1349→        <DialogFooter>
+  1350→          <Button
+  1351→            variant="outline"
+  1352→            onClick={onClose}
+  1353→            className="border-neutral-700 bg-neutral-900 text-neutral-300 hover:bg-neutral-800"
+  1354→          >
+  1355→            {phase.kind === "done" ? "Close" : "Cancel"}
+  1356→          </Button>
+  1357→        </DialogFooter>
+  1358→      </DialogContent>
+  1359→    </Dialog>
+  1360→  );
+  1361→}
+  1362→
+  1363→async function requestChallenge(
+  1364→  characterId: string,
+  1365→  isDemo: boolean,
+  1366→  setPhase: (p: LivenessPhase) => void,
+  1367→) {
+  1368→  setPhase({ kind: "requesting" });
+  1369→  if (isDemo) {
+  1370→    await sleep(700);
+  1371→    const challenge: LivenessChallenge = {
+  1372→      challenge_id: `demo-challenge-${Math.random().toString(36).slice(2, 8)}`,
+  1373→      steps: DEMO_STEPS,
+  1374→      issued_at: Date.now(),
+  1375→    };
+  1376→    setPhase({
+  1377→      kind: "challenge",
+  1378→      challenge,
+  1379→      cameraStarted: false,
+  1380→      verifying: false,
+  1381→      progress: 0,
+  1382→    });
+  1383→    return;
+  1384→  }
+  1385→  try {
+  1386→    const res = await fetch(engineUrl("/api/consent/liveness/request"), {
+  1387→      method: "POST",
+  1388→      headers: { "Content-Type": "application/json" },
+  1389→      body: JSON.stringify({ character_id: characterId }),
+  1390→    });
+  1391→    if (!res.ok) {
+  1392→      throw new Error(`Engine returned ${res.status}`);
+  1393→    }
+  1394→    const challenge = (await res.json()) as LivenessChallenge;
+  1395→    setPhase({
+  1396→      kind: "challenge",
+  1397→      challenge,
+  1398→      cameraStarted: false,
+  1399→      verifying: false,
+  1400→      progress: 0,
+  1401→    });
+  1402→  } catch (e) {
+  1403→    setPhase({
+  1404→      kind: "error",
+  1405→      message: e instanceof Error ? e.message : String(e),
+  1406→    });
+  1407→  }
+  1408→}
+  1409→
+  1410→async function verifyChallenge(
+  1411→  characterId: string,
+  1412→  challenge: LivenessChallenge,
+  1413→  isDemo: boolean,
+  1414→): Promise<LivenessResult> {
+  1415→  // Match the engine's challenge steps back at it — in a real app this would
+  1416→  // be the steps the client's MediaPipe actually detected.
+  1417→  const detected = challenge.steps;
+  1418→  const evidence = {
+  1419→    landmark_count: 468,
+  1420→    face_hash: `demo-${characterId}-${Date.now()}`,
+  1421→  };
+  1422→  if (isDemo) {
+  1423→    await sleep(1500);
+  1424→    return {
+  1425→      challenge_id: challenge.challenge_id,
+  1426→      passed: true,
+  1427→      consent_token: `demo-token.${Math.random().toString(36).slice(2)}`,
+  1428→    };
+  1429→  }
+  1430→  const res = await fetch(engineUrl("/api/consent/liveness/verify"), {
+  1431→    method: "POST",
+  1432→    headers: { "Content-Type": "application/json" },
+  1433→    body: JSON.stringify({
+  1434→      challenge_id: challenge.challenge_id,
+  1435→      detected_steps: detected,
+  1436→      landmark_evidence: evidence,
+  1437→    }),
+  1438→  });
+  1439→  if (!res.ok) {
+  1440→    throw new Error(`Verify returned ${res.status}`);
+  1441→  }
+  1442→  return (await res.json()) as LivenessResult;
+  1443→}
+  1444→
+  1445→async function bindCharacter(
+  1446→  characterId: string,
+  1447→  consentToken: string,
+  1448→  isDemo: boolean,
+  1449→) {
+  1450→  if (isDemo) {
+  1451→    await sleep(600);
+  1452→    return;
+  1453→  }
+  1454→  const res = await fetch(
+  1455→    engineUrl(`/api/characters/${encodeURIComponent(characterId)}/consent/bind`),
+  1456→    {
+  1457→      method: "POST",
+  1458→      headers: { "Content-Type": "application/json" },
+  1459→      body: JSON.stringify({
+  1460→        character_id: characterId,
+  1461→        consent_token: consentToken,
+  1462→      }),
+  1463→    },
+  1464→  );
+  1465→  if (!res.ok) {
+  1466→    throw new Error(`Bind returned ${res.status}`);
+  1467→  }
+  1468→}
+  1469→
+  1470→// ---------------------------------------------------------------------------
+  1471→// Shared subcomponents
+  1472→// ---------------------------------------------------------------------------
+  1473→
+  1474→function SubmitRow({
+  1475→  busy,
+  1476→  disabled,
+  1477→  onSubmit,
+  1478→  isDemo,
+  1479→  actionLabel,
+  1480→  icon,
+  1481→}: {
+  1482→  busy: boolean;
+  1483→  disabled: boolean;
+  1484→  onSubmit: () => void;
+  1485→  isDemo: boolean;
+  1486→  actionLabel: string;
+  1487→  icon: React.ReactNode;
+  1488→}) {
+  1489→  return (
+  1490→    <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
+  1491→      <Button
+  1492→        type="button"
+  1493→        size="lg"
+  1494→        onClick={onSubmit}
+  1495→        disabled={disabled}
+  1496→        className="bg-rose-500 text-white hover:bg-rose-400 disabled:cursor-not-allowed disabled:opacity-50"
+  1497→      >
+  1498→        {busy ? <Loader2 className="size-4 animate-spin" /> : icon}
+  1499→        {busy ? "Working…" : actionLabel}
+  1500→      </Button>
+  1501→      {isDemo ? (
+  1502→        <span className="text-[11px] text-amber-200/80">
+  1503→          Simulated — engine not connected, no real generation runs.
+  1504→        </span>
+  1505→      ) : null}
+  1506→    </div>
+  1507→  );
+  1508→}
+  1509→
+  1510→function FileDrop({
+  1511→  accept,
+  1512→  file,
+  1513→  previewUrl,
+  1514→  onPick,
+  1515→  label,
+  1516→  hint,
+  1517→  error,
+  1518→}: {
+  1519→  accept: string;
+  1520→  file: File | null;
+  1521→  previewUrl: string | null;
+  1522→  onPick: (f: File) => void;
+  1523→  label: string;
+  1524→  hint?: string;
+  1525→  error?: boolean;
+  1526→}) {
+  1527→  const inputRef = React.useRef<HTMLInputElement>(null);
+  1528→  const [dragOver, setDragOver] = React.useState(false);
+  1529→
+  1530→  const onDrop = (e: React.DragEvent) => {
+  1531→    e.preventDefault();
+  1532→    setDragOver(false);
+  1533→    const f = e.dataTransfer.files?.[0];
+  1534→    if (f) onPick(f);
+  1535→  };
+  1536→
+  1537→  return (
+  1538→    <div className="grid gap-2">
+  1539→      <button
+  1540→        type="button"
+  1541→        onClick={() => inputRef.current?.click()}
+  1542→        onDragOver={(e) => {
+  1543→          e.preventDefault();
+  1544→          setDragOver(true);
+  1545→        }}
+  1546→        onDragLeave={() => setDragOver(false)}
+  1547→        onDrop={onDrop}
+  1548→        aria-label={label}
+  1549→        className={cn(
+  1550→          "relative grid place-items-center rounded-lg border-2 border-dashed p-6 text-center transition-colors",
+  1551→          dragOver
+  1552→            ? "border-rose-400 bg-rose-500/10"
+  1553→            : error
+  1554→              ? "border-amber-500/60 bg-amber-500/[0.04]"
+  1555→              : "border-neutral-700 bg-neutral-950/40 hover:border-neutral-600 hover:bg-neutral-900/40",
+  1556→        )}
+  1557→      >
+  1558→        {previewUrl ? (
+  1559→          <div className="flex flex-col items-center gap-3">
+  1560→            <img
+  1561→              src={previewUrl}
+  1562→              alt={file?.name ?? "Preview"}
+  1563→              className="max-h-48 rounded-md border border-neutral-800 object-contain"
+  1564→            />
+  1565→            <p className="text-xs text-neutral-400">
+  1566→              {file?.name} · click to replace
+  1567→            </p>
+  1568→          </div>
+  1569→        ) : (
+  1570→          <div className="flex flex-col items-center gap-2 text-neutral-400">
+  1571→            <Upload className="size-6 text-neutral-500" />
+  1572→            <p className="text-sm text-neutral-300">{label}</p>
+  1573→            <p className="text-[11px] text-neutral-500">
+  1574→              Accepts {accept === "image/png" ? "PNG only" : "any image"}
+  1575→            </p>
+  1576→          </div>
+  1577→        )}
+  1578→        <input
+  1579→          ref={inputRef}
+  1580→          type="file"
+  1581→          accept={accept}
+  1582→          className="sr-only"
+  1583→          onChange={(e) => {
+  1584→            const f = e.target.files?.[0];
+  1585→            if (f) onPick(f);
+  1586→            // Reset so picking the same file again still fires onChange.
+  1587→            e.target.value = "";
+  1588→          }}
+  1589→        />
+  1590→      </button>
+  1591→      {hint ? (
+  1592→        <p
+  1593→          className={cn(
+  1594→            "text-[11px] leading-relaxed",
+  1595→            error ? "text-amber-300" : "text-neutral-500",
+  1596→          )}
+  1597→        >
+  1598→          {hint}
+  1599→        </p>
+  1600→      ) : null}
+  1601→    </div>
+  1602→  );
+  1603→}
+  1604→
+  1605→// ---------------------------------------------------------------------------
+  1606→// Small helpers
+  1607→// ---------------------------------------------------------------------------
+  1608→
+  1609→function sleep(ms: number): Promise<void> {
+  1610→  return new Promise((resolve) => setTimeout(resolve, ms));
+  1611→}
+  1612→
+  1613→function fileToDataUrl(file: File): Promise<string> {
+  1614→  return new Promise((resolve, reject) => {
+  1615→    const reader = new FileReader();
+  1616→    reader.onload = () => resolve(reader.result as string);
+  1617→    reader.onerror = () => reject(reader.error ?? new Error("read failed"));
+  1618→    reader.readAsDataURL(file);
+  1619→  });
+  1620→}
+  1621→

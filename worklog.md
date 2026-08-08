@@ -158,3 +158,24 @@ Stage Summary:
 - Liveness flow correctly walks the three-stage pipeline (request → verify → bind) in both real and demo modes, with the progress bar + success callout making the bind moment visible.
 - Files created: src/lib/character-store.ts, src/components/studio/create-character.tsx. Files modified: contracts/types.ts, tsconfig.json, src/components/studio/studio-panel.tsx, src/components/architecture/studio-section.tsx, src/components/architecture/roadmap.tsx.
 - Lint: passed. Dev server: compiles cleanly (200 on /).
+
+---
+Task ID: p3-merge + p3-ui-recovery
+Agent: lead (main)
+Task: Resolve conflict between my Phase 3 and upstream af7b47d (independent Phase 3 by payswapdotorg); add production-path DI tests; recover + reconcile UI.
+
+Work Log:
+- Built my own Phase 3 (render_queue.py + DemoRenderer + DiffusionRenderer stub + 10 tests + UI via subagent). Push was rejected — upstream af7b47d landed first with a DIFFERENT Phase 3 implementation.
+- Reviewed af7b47d: external-command renderer (DIFFUSION_RENDER_CMD) instead of my DemoRenderer; shared _enforce_consent_gate helper; input validation rejecting remote URLs; DI-rewritten render_pipeline.py; 61 tests. Their approach is more production-real and better-thought-out than mine — external-command is how you'd actually deploy, my DemoRenderer was a demo crutch.
+- Decision: took upstream as the base (git reset --hard origin/main), salvaged only my independently-valuable non-conflicting work:
+  * The 3 production-path DI tests for _resolve_poser (instruction #3 from 80e1088 audit). Upstream didn't have them. Verified they catch the regression by temporarily reverting the fix. 64 tests total (61 + 3).
+  * The Phase 3 UI (upstream was engine-only): recovered async-render.tsx, liveness-dialog.tsx, roadmap SHIPPED badge, contracts helpers, studio-section composition from my previous commit.
+- Reconciled UI with upstream's API: download endpoint is /file (upstream) not /download (mine); updated renderDownloadUrl() and driver URL help text to reflect upstream's remote-URL rejection.
+- Lint clean; 64 engine tests pass; Agent Browser verified: page renders all three panels (Create Character, Async Render, Studio) + Phase 3 SHIPPED badge, no errors.
+- Pushed (126a3d3).
+
+Stage Summary:
+- Two independent Phase 3 implementations collided; took the better one (upstream's external-command pattern) and layered my production-path tests + UI on top.
+- The 80e1088 audit's instruction #3 (test the non-injected production path for DI components) is now satisfied: 3 tests guard _resolve_poser's fallback branch, verified to catch the exact AttributeError regression.
+- 64 tests pass. Phase 3 is shipped end-to-end (engine + UI). The consent gate is consistently enforced across live + async paths.
+- Honest framing preserved: the diffusion model itself is bring-your-own (external command), same as THA3's weights. No open-source model reliably hits anime-style audio-driven lip-sync yet.
