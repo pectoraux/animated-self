@@ -1,0 +1,29 @@
+{
+  "version": 1,
+  "characters": [
+    {
+      "id": "stock-aoi",
+      "name": "Aoi",
+      "source": "stock",
+      "thumbnail": "stock/aoi.png",
+      "consented": true,
+      "tags": ["female", "blue-hair", "default"]
+    },
+    {
+      "id": "stock-ren",
+      "name": "Ren",
+      "source": "stock",
+      "thumbnail": "stock/ren.png",
+      "consented": true,
+      "tags": ["male", "dark-hair"]
+    },
+    {
+      "id": "stock-yuki",
+      "name": "Yuki",
+      "source": "stock",
+      "thumbnail": "stock/yuki.png",
+      "consented": true,
+      "tags": ["female", "white-hair"]
+    }
+  ]
+}

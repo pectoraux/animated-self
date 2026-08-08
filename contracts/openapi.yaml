@@ -1,0 +1,169 @@
+openapi: 3.1.0
+info:
+  title: animated-self engine
+  version: 0.1.0
+  description: |
+    Phase 1 MVP API. Live path = pose vector over WebSocket -> THA3 -> OBS
+    Virtual Camera. Async path = REST render job (Phase 3 impl; contract stable).
+    Consent/liveness contract exists in Phase 1 and is enforced for custom
+    characters in Phase 2.
+servers:
+  - url: /                   # reached via gateway with ?XTransformPort=3031
+
+paths:
+  /api/health:
+    get:
+      summary: Engine capability flags (CUDA present? model loaded?)
+      responses: { "200": { description: ok } }
+
+  /api/characters:
+    get:
+      summary: List available reference characters
+      responses:
+        "200":
+          description: list
+          content:
+            application/json:
+              schema: { type: array, items: { $ref: "#/components/schemas/Character" } }
+
+  /api/characters/{id}/thumbnail:
+    get:
+      summary: Character reference PNG
+      parameters: [ { name: id, in: path, required: true, schema: { type: string } } ]
+      responses: { "200": { description: png }, "404": { description: not found } }
+
+  /api/session/start:
+    post:
+      summary: Bind a character + output sink, cache the source image, open the sink
+      requestBody:
+        required: true
+        content:
+          application/json: { schema: { $ref: "#/components/schemas/StartSessionRequest" } }
+      responses:
+        "200": { description: session, content: { application/json: { schema: { $ref: "#/components/schemas/StartSessionResponse" } } } }
+        "403": { description: consent required }
+        "503": { description: model not loaded }
+
+  /api/session/{id}/stop:
+    post:
+      parameters: [ { name: id, in: path, required: true, schema: { type: string } } ]
+      responses: { "200": { description: ok } }
+
+  /api/session/{id}/preview.jpg:
+    get:
+      summary: Latest rendered frame as JPEG (only when output=preview)
+      parameters: [ { name: id, in: path, required: true, schema: { type: string } } ]
+      responses: { "200": { description: jpeg }, "404": { description: not found }, "409": { description: no frame yet } }
+
+  /ws/live:
+    get:
+      summary: |
+        Live pose stream (WebSocket upgrade). Client sends PoseVector JSON
+        frames; server emits FrameStats at most once per second.
+      parameters:
+        - { name: session_id, in: query, required: true, schema: { type: string } }
+        - { name: XTransformPort, in: query, required: true, schema: { type: integer, enum: [3031] } }
+
+  /api/consent/liveness/request:
+    post:
+      summary: Issue a randomized motion challenge
+      responses: { "200": { description: challenge, content: { application/json: { schema: { $ref: "#/components/schemas/LivenessChallenge" } } } } }
+
+  /api/consent/liveness/verify:
+    post:
+      summary: Verify detected challenge steps; issue consent_token bound to face hash
+      responses: { "200": { description: result, content: { application/json: { schema: { $ref: "#/components/schemas/LivenessResult" } } } } }
+
+  /api/render:
+    post:
+      summary: Queue an async quality-mode render (Phase 3 impl; contract stable)
+      requestBody:
+        required: true
+        content:
+          application/json: { schema: { $ref: "#/components/schemas/RenderRequest" } }
+      responses: { "200": { description: job, content: { application/json: { schema: { $ref: "#/components/schemas/RenderJob" } } } } }
+
+  /api/render/{job_id}:
+    get:
+      parameters: [ { name: job_id, in: path, required: true, schema: { type: string } } ]
+      responses: { "200": { description: job, content: { application/json: { schema: { $ref: "#/components/schemas/RenderJob" } } } } }
+
+components:
+  schemas:
+    Character:
+      type: object
+      properties:
+        id: { type: string }
+        name: { type: string }
+        source: { type: string, enum: [stock, generated, uploaded] }
+        thumbnail_url: { type: string }
+        consented: { type: boolean }
+        tags: { type: array, items: { type: string } }
+    PoseVector:
+      type: object
+      description: The only per-frame live message (~250 bytes). NOT a video frame.
+      properties:
+        ts_ms: { type: integer }
+        head: { $ref: "#/components/schemas/HeadPose" }
+        left_eye: { $ref: "#/components/schemas/EyeState" }
+        right_eye: { $ref: "#/components/schemas/EyeState" }
+        mouth: { $ref: "#/components/schemas/MouthState" }
+        left_brow: { type: number }
+        right_brow: { type: number }
+        audio_level: { type: number, nullable: true }
+    HeadPose: { type: object, properties: { yaw: {type:number}, pitch: {type:number}, roll: {type:number}, x:{type:number}, y:{type:number}, z:{type:number} } }
+    EyeState: { type: object, properties: { blink: {type:number}, pupil_x: {type:number}, pupil_y: {type:number} } }
+    MouthState: { type: object, properties: { open: {type:number}, smile: {type:number}, pucker: {type:number} } }
+    StartSessionRequest:
+      type: object
+      properties:
+        character_id: { type: string }
+        output: { type: string, enum: [virtual_cam, preview, file] }
+        consent_token: { type: string, nullable: true }
+    StartSessionResponse:
+      type: object
+      properties:
+        session_id: { type: string }
+        ws_url: { type: string }
+        character: { $ref: "#/components/schemas/Character" }
+        output: { type: string, enum: [virtual_cam, preview, file] }
+        capabilities: { type: object, additionalProperties: { type: boolean } }
+    FrameStats:
+      type: object
+      properties:
+        type: { type: string, enum: [stats] }
+        fps_in: { type: number }
+        fps_out: { type: number }
+        infer_ms: { type: number }
+        queue_depth: { type: integer }
+        dropped_stale: { type: integer }
+        budget_warning: { type: boolean }
+    RenderRequest:
+      type: object
+      properties:
+        character_id: { type: string }
+        driver: { type: string, enum: [audio, video] }
+        driver_url: { type: string }
+        quality: { type: string, enum: [draft, high] }
+        consent_token: { type: string, nullable: true }
+    RenderJob:
+      type: object
+      properties:
+        job_id: { type: string }
+        status: { type: string, enum: [queued, running, rendering, done, failed] }
+        progress: { type: number }
+        download_url: { type: string, nullable: true }
+        error: { type: string, nullable: true }
+    LivenessChallenge:
+      type: object
+      properties:
+        challenge_id: { type: string }
+        steps: { type: array, items: { type: string } }
+        issued_at: { type: integer }
+    LivenessResult:
+      type: object
+      properties:
+        challenge_id: { type: string }
+        passed: { type: boolean }
+        consent_token: { type: string }
+        reason: { type: string, nullable: true }

@@ -1,0 +1,37 @@
+# animated-self engine — Phase 1 dependencies
+# Pin major versions; this is a real-time pipeline, reproducibility matters.
+
+# Web server
+fastapi==0.115.6
+uvicorn[standard]==0.34.0
+websockets==14.1
+
+# Model runtime (CUDA build must match the host driver; install torch separately
+# from the official index, e.g.:
+#   pip install torch==2.5.1 torchvision==0.20.1 --index-url https://download.pytorch.org/whl/cu121
+torch==2.5.1
+torchvision==0.20.1
+numpy==1.26.4
+
+# Image / video I/O
+Pillow==10.4.0
+opencv-python-headless==4.10.0.84
+imageio==2.36.1
+imageio-ffmpeg==0.5.1
+
+# Virtual camera -> OBS Virtual Camera / v4l2loopback
+pyvirtualcam==0.11.1
+
+# MediaPipe is used *in the browser* for the live path (pose extraction), but
+# the engine also imports it for the async render path (driver-video landmarking)
+# and for the consent/liveness check.
+mediapipe==0.10.18
+
+# Validation / config
+pydantic==2.10.4
+pydantic-settings==2.7.1
+python-dotenv==1.0.1
+
+# Utilities
+pyyaml==6.0.2
+tqdm==4.67.1
