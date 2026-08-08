@@ -96,6 +96,7 @@ export type RenderJobStatus = "queued" | "running" | "rendering" | "done" | "fai
 export interface RenderJob {
   job_id: string;
   status: RenderJobStatus;
+  /** 0..1 — server-side progress fraction. Multiply by 100 for a percentage bar. */
   progress: number;
   download_url?: string | null;
   error?: string | null;
@@ -164,6 +165,16 @@ export const ENGINE_PORT = 3031;
 export function engineUrl(path: string): string {
   const sep = path.includes("?") ? "&" : "?";
   return `${path}${sep}XTransformPort=${ENGINE_PORT}`;
+}
+
+/** Phase 3 — poll URL for a render job's status. */
+export function renderJobUrl(jobId: string): string {
+  return engineUrl(`/api/render/${encodeURIComponent(jobId)}`);
+}
+
+/** Phase 3 — download URL for a finished render job's MP4. */
+export function renderDownloadUrl(jobId: string): string {
+  return engineUrl(`/api/render/${encodeURIComponent(jobId)}/file`);
 }
 
 /** Build the WebSocket URL the control panel uses for the live pose stream. */

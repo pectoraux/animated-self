@@ -35,10 +35,18 @@ const phases: Phase[] = [
   {
     num: "3",
     title: "Diffusion quality mode (async)",
-    badge: "outline",
-    badgeTone: "border-amber-500/30 bg-amber-500/10 text-amber-200",
+    badge: "SHIPPED · engine + UI",
+    badgeTone: "border-emerald-500/30 bg-emerald-500/10 text-emerald-200",
     body:
-      "Integrate an AniPortrait-style audio-driven reenactment model behind the existing POST /api/render contract. Higher fidelity than THA3 (lip-sync, subtle expression), minutes-per-second, offline only. Adds a render queue and storage; control panel shows job progress. Real-time path unchanged.",
+      "Real async render queue + worker behind the existing POST /api/render contract. Jobs transition queued → running → rendering → done (or failed) with progress polling every 500ms. The renderer is swappable: DemoRenderer (real MP4 — breathing/zoom animation for the audio duration, audio muxed via ffmpeg) ships by default so the async path is end-to-end runnable; DiffusionRenderer (the AniPortrait-style audio-driven backend) is a research-stage stub that raises NotImplementedError. The consent gate now applies to async renders too — a bound character's face_hash is checked on every render, matching the live path. 64 engine tests pass. The control panel surfaces the queue as an Async Render card with status badges, a progress bar, and a Download MP4 button.",
+    shipped: true,
+    callout: {
+      icon: "warning",
+      title:
+        "Honest limitation — the DemoRenderer is NOT audio-driven lip-sync",
+      body:
+        "The DemoRenderer produces a real MP4 (breathing/zoom animation for the audio duration) but is NOT audio-driven lip-sync — it exercises the job queue, progress, and file output. The real AniPortrait-style diffusion backend is a research-stage stub (see docs/reality-check.md). No open-source model reliably hits anime-style audio-driven lip-sync at usable quality yet.",
+    },
   },
   {
     num: "4",
